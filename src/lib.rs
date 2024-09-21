@@ -1,45 +1,14 @@
-pub fn file(argv: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
-    if argv.is_empty() {
-        if let Ok(exe) = std::env::current_exe() {
-            eprintln!("Not enough arguments. Usage: {} [files]", exe.display());
-        } else {
-            eprintln!("Shiiiiiiits fucked man. Close Chrome or something before running again.")
-        }
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput).into());
-    }
-    for argument in argv.iter() {
-        print!("{}: ", argument.to_string_lossy());
-        let possible_file = std::fs::read(std::path::Path::new(&argument));
-        match possible_file {
-            Ok(file) => {
-                let classification = classify_file(file);
-                match classification {
-                    FileClassifications::Empty => {
-                        println!("empty")
-                    }
-                    FileClassifications::Ascii => {
-                        println!("ASCII text")
-                    }
-                    FileClassifications::Latin1 => {
-                        println!("ISO 8859-1 text")
-                    }
-                    FileClassifications::Utf8 => {
-                        println!("UTF-8 text")
-                    }
-                    FileClassifications::Data => {
-                        println!("data")
-                    }
-                }
-            }
-            Err(error) => {
-                println!("{error}");
-            }
-        }
-    }
-    Ok(())
-}
+use std::{
+    collections::HashMap,
+    error::Error,
+    ffi::OsString,
+    fs::File,
+    io::{BufReader, Error as IOError, ErrorKind},
+    path::*,
+    vec::Vec,
+};
 
-enum FileClassifications {
+enum FileType {
     Empty,
     Ascii,
     Latin1,
@@ -47,79 +16,47 @@ enum FileClassifications {
     Data,
 }
 
-fn classify_file(file: Vec<u8>) -> FileClassifications {
-    if file.is_empty() {
-        return FileClassifications::Empty;
-    }
-    if file.is_ascii() {
-        return FileClassifications::Ascii;
-    }
-    if std::str::from_utf8(&file).is_ok() {
-        return FileClassifications::Utf8;
-    }
-    if file.iter().all(|c| c.is_ascii() || *c >= 0xA0u8) {
-        return FileClassifications::Latin1;
-    }
-    FileClassifications::Data
-}
+type FileState = Result<FileType, IOError>;
 
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
-
-    use crate::file;
-
-    #[test]
-    fn no_args() {
-        assert!(file(vec![]).is_err());
+pub fn file() -> Result<(), Box<dyn Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.is_empty() {
+        eprintln!("Invalid number of arguments");
+        return Err(IOError::from(ErrorKind::InvalidInput).into());
     }
-
-    #[test]
-    fn invalid_arg() {
-        assert!(file(vec![OsString::from("foo")]).is_ok());
+    let mut file_paths: Vec<PathBuf> = Vec::with_capacity(args.len());
+    let mut file_states: HashMap<PathBuf, FileState> = HashMap::with_capacity(args.len());
+    for arg in args {
+        let path = Path::new(&arg);
+        match path.try_exists() {
+            Ok(result) => {
+                if !result {
+                    file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
+                    continue;
+                }
+            }
+            Err(error) => {
+                file_states.insert(path.to_owned(), Err(error));
+                continue;
+            }
+        }
+        if !path.is_file() {
+            file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
+        }
+        file_paths.push(path.to_owned());
     }
-
-    #[test]
-    fn unreadable() {
-        assert!(file(vec![OsString::from("./test_files/noread")]).is_ok());
+    let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(file_paths.len());
+    for path in file_paths {
+        let possible_file = File::open(&path);
+        let file = match possible_file { 
+            Ok(data) => {data}
+            Err(error) => {
+                file_states.insert(path, Err(error));
+                continue;
+            }
+        };
+        files.push((path, BufReader::new(file)));
     }
-
-    #[test]
-    fn test_data() {
-        assert!(file(vec![OsString::from("./test_files/data.data")]).is_ok());
-    }
-
-    #[test]
-    fn test_empty() {
-        assert!(file(vec![OsString::from("./test_files/empty")]).is_ok());
-    }
-
-    #[test]
-    fn test_iso() {
-        assert!(file(vec![OsString::from("./test_files/iso8859-1.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_ascii() {
-        assert!(file(vec![OsString::from("./test_files/ascii.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_utf8() {
-        assert!(file(vec![OsString::from("./test_files/utf8.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_all() {
-        assert!(file(vec![
-            OsString::from("foo"),
-            OsString::from("./test_files/noread"),
-            OsString::from("./test_files/data.data"),
-            OsString::from("./test_files/empty"),
-            OsString::from("./test_files/iso8859-1.txt"),
-            OsString::from("./test_files/ascii.txt"),
-            OsString::from("./test_files/utf8.txt")
-        ])
-        .is_ok());
-    }
+    todo!();
+    Ok(())
 }
