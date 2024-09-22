@@ -1,8 +1,8 @@
 use file::file;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), std::io::Error> {
     let results = file();
-    if results.is_err() { 
+    if results.is_err() {
         eprintln!("Usage: file [files]");
     }
     results

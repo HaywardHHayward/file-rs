@@ -2,9 +2,8 @@ mod utf8sequence;
 
 use std::{
     collections::HashMap,
-    error::Error,
     fs::File,
-    io::{BufRead, BufReader, Error as IOError, ErrorKind},
+    io::{BufReader, Error as IOError, ErrorKind, Read, Seek, SeekFrom},
     path::*,
     vec::Vec,
 };
@@ -21,44 +20,24 @@ enum FileType {
 
 type FileState = Result<FileType, IOError>;
 
-pub fn file() -> Result<(), Box<dyn Error>> {
+pub fn file() -> Result<(), IOError> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.is_empty() {
         eprintln!("Invalid number of arguments.");
-        return Err(IOError::from(ErrorKind::InvalidInput).into());
+        return Err(IOError::from(ErrorKind::InvalidInput));
     }
-    let mut file_paths: Vec<PathBuf> = Vec::with_capacity(args.len());
+    let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(args.len());
     let mut file_states: HashMap<PathBuf, FileState> = HashMap::with_capacity(args.len());
     for arg in args {
         let path = Path::new(&arg);
-        match path.try_exists() {
-            Ok(result) => {
-                if !result {
-                    file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
-                    continue;
-                }
-            }
+        let file = match File::open(path) {
+            Ok(data) => data,
             Err(error) => {
                 file_states.insert(path.to_owned(), Err(error));
                 continue;
             }
-        }
-        if !path.is_file() {
-            file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
-        }
-        file_paths.push(path.to_owned());
-    }
-    let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(file_paths.len());
-    for path in file_paths {
-        let possible_file = File::open(&path);
-        let file = match possible_file {
-            Ok(data) => data,
-            Err(error) => {
-                file_states.insert(path, Err(error));
-                continue;
-            }
         };
-        files.push((path, BufReader::new(file)));
+        files.push((path.to_owned(), BufReader::new(file)));
     }
     for (path, file) in files {
         file_states.insert(path, classify_file(file));
@@ -93,46 +72,46 @@ fn classify_file(mut file: BufReader<File>) -> FileState {
     let mut is_latin1 = true;
     let mut is_utf8 = true;
     let mut sequence_option: Option<Utf8Sequence> = None;
-    let mut buffer = file.fill_buf()?;
-    if buffer.is_empty() {
+    let length = file.seek(SeekFrom::End(0))?;
+    if length == 0 {
         return Ok(FileType::Empty);
     }
-    while !buffer.is_empty() {
-        for &byte in buffer {
-            if is_ascii && !is_byte_ascii(byte) {
-                is_ascii = false;
-            }
-            if is_latin1 && !is_byte_latin1(byte) {
-                is_latin1 = false;
+    file.rewind()?;
+    let file_bytes = file.bytes();
+    for result_byte in file_bytes {
+        let byte = result_byte?;
+        if is_ascii && !is_byte_ascii(byte) {
+            is_ascii = false;
+        }
+        if is_latin1 && !is_byte_latin1(byte) {
+            is_latin1 = false;
+        }
+        if is_utf8 {
+            if sequence_option.is_none() {
+                match Utf8Sequence::build(byte) {
+                    None => is_utf8 = false,
+                    Some(data) => sequence_option = Some(data),
+                }
+            } else if let Some(data) = &mut sequence_option {
+                if data.current_len() < data.full_len() && !data.add_byte(byte) {
+                    is_utf8 = false;
+                }
             }
             if is_utf8 {
-                if sequence_option.is_none() {
-                    match Utf8Sequence::build(byte) {
-                        None => is_utf8 = false,
-                        Some(data) => sequence_option = Some(data),
-                    }
-                } else if let Some(data) = &mut sequence_option {
-                    if data.current_len() < data.full_len() && !data.add_byte(byte) {
-                        is_utf8 = false;
-                    }
-                }
                 let Some(ref sequence) = sequence_option else {
                     unreachable!()
                 };
-                if is_utf8 && sequence.full_len() == sequence.current_len() {
+                if sequence.full_len() == sequence.current_len() {
                     if !sequence.is_valid_codepoint() {
                         is_utf8 = false;
                     }
                     sequence_option = None;
                 }
             }
-            if !is_ascii && !is_latin1 && !is_utf8 {
-                return Ok(FileType::Data);
-            }
         }
-        let buffer_length = buffer.len();
-        file.consume(buffer_length);
-        buffer = file.fill_buf()?;
+        if !is_ascii && !is_latin1 && !is_utf8 {
+            return Ok(FileType::Data);
+        }
     }
     if is_utf8 && sequence_option.is_some() {
         is_utf8 = false;
