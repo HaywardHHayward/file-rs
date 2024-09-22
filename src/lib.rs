@@ -3,15 +3,15 @@ mod utf8sequence;
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, Error as IOError, ErrorKind, Read, Seek, SeekFrom},
-    path::*,
-    sync::{Arc, Mutex}, thread,
+    io::{BufReader, Error as IOError, ErrorKind, Read},
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+    thread,
     vec::Vec,
 };
 
 use utf8sequence::*;
 
-#[derive(Debug)]
 enum FileType {
     Empty,
     Ascii,
@@ -39,6 +39,17 @@ pub fn file() -> Result<(), IOError> {
                 continue;
             }
         };
+        let metadata = match std::fs::metadata(path) {
+            Ok(data) => data,
+            Err(error) => {
+                file_states.insert(path.to_owned(), Err(error));
+                continue;
+            }
+        };
+        if metadata.len() == 0 {
+            file_states.insert(path.to_owned(), Ok(FileType::Empty));
+            continue;
+        }
         files.push((path.to_owned(), BufReader::new(file)));
     }
     if files.len() <= 1 {
@@ -52,14 +63,14 @@ pub fn file() -> Result<(), IOError> {
             let map_copy = shared_map.clone();
             thread_pool.push(thread::spawn(move || {
                 let data = classify_file(file);
-                let mut map = map_copy.lock().unwrap();
-                map.insert(path, data);
+                let mut locked_map = map_copy.lock().unwrap();
+                locked_map.insert(path, data);
             }));
         }
         for thread in thread_pool {
-            thread.join().unwrap();
+            thread.join().expect("thread panicked");
         }
-        file_states = Arc::try_unwrap(shared_map).unwrap().into_inner().unwrap();
+        file_states = Arc::into_inner(shared_map).unwrap().into_inner().unwrap();
     }
     for (path, file_result) in file_states {
         print!("{}: ", path.display());
@@ -79,56 +90,54 @@ pub fn file() -> Result<(), IOError> {
 }
 
 const fn is_byte_ascii(byte: u8) -> bool {
-    (byte >= 0x07 && byte <= 0x0D) || byte == 0x1B || (byte >= 0x20 && byte <= 0x7E)
+    matches!(byte, 0x07..=0x0D | 0x1B | 0x20..=0x7E)
 }
 
 const fn is_byte_latin1(byte: u8) -> bool {
     is_byte_ascii(byte) || byte >= 0xA0
 }
 
-fn classify_file(mut file: BufReader<File>) -> FileState {
+fn classify_file(file: BufReader<File>) -> FileState {
     let [mut is_ascii, mut is_latin1, mut is_utf8] = [true; 3];
     let mut sequence_option: Option<Utf8Sequence> = None;
-    let length = file.seek(SeekFrom::End(0))?;
-    if length == 0 {
-        return Ok(FileType::Empty);
-    }
-    file.rewind()?;
     let file_bytes = file.bytes();
     for result_byte in file_bytes {
         let byte = result_byte?;
         if is_ascii && !is_byte_ascii(byte) {
             is_ascii = false;
         }
-        if is_latin1 && !is_byte_latin1(byte) {
+        if !is_ascii && is_latin1 && !is_byte_latin1(byte) {
             is_latin1 = false;
         }
-        if is_utf8 {
+        if !is_ascii && is_utf8 {
             if sequence_option.is_none() {
                 match Utf8Sequence::build(byte) {
-                    None => is_utf8 = false,
+                    None => {
+                        is_utf8 = false;
+                        continue;
+                    }
                     Some(data) => sequence_option = Some(data),
                 }
-            } else if let Some(data) = &mut sequence_option {
+            } else {
+                let data = sequence_option.as_mut().unwrap();
                 if data.current_len() < data.full_len() && !data.add_byte(byte) {
                     is_utf8 = false;
+                    continue;
                 }
             }
-            if is_utf8 {
-                let sequence = sequence_option.as_ref().unwrap();
-                if sequence.full_len() == sequence.current_len() {
-                    if !sequence.is_valid_codepoint() {
-                        is_utf8 = false;
-                    }
-                    sequence_option = None;
+            let sequence = sequence_option.as_ref().unwrap();
+            if sequence.full_len() == sequence.current_len() {
+                if !sequence.is_valid_codepoint() {
+                    is_utf8 = false;
                 }
+                sequence_option = None;
             }
         }
-        if !is_ascii && !is_latin1 && !is_utf8 {
+        if !is_latin1 && !is_utf8 && !is_ascii {
             return Ok(FileType::Data);
         }
     }
-    if is_utf8 && sequence_option.is_some() {
+    if sequence_option.is_some() {
         is_utf8 = false;
     }
     if is_ascii {
