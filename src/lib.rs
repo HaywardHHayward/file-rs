@@ -1,45 +1,17 @@
-pub fn file(argv: Vec<std::ffi::OsString>) -> Result<(), Box<dyn std::error::Error>> {
-    if argv.is_empty() {
-        if let Ok(exe) = std::env::current_exe() {
-            eprintln!("Not enough arguments. Usage: {} [files]", exe.display());
-        } else {
-            eprintln!("Shiiiiiiits fucked man. Close Chrome or something before running again.")
-        }
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput).into());
-    }
-    for argument in argv.iter() {
-        print!("{}: ", argument.to_string_lossy());
-        let possible_file = std::fs::read(std::path::Path::new(&argument));
-        match possible_file {
-            Ok(file) => {
-                let classification = classify_file(file);
-                match classification {
-                    FileClassifications::Empty => {
-                        println!("empty")
-                    }
-                    FileClassifications::Ascii => {
-                        println!("ASCII text")
-                    }
-                    FileClassifications::Latin1 => {
-                        println!("ISO 8859-1 text")
-                    }
-                    FileClassifications::Utf8 => {
-                        println!("UTF-8 text")
-                    }
-                    FileClassifications::Data => {
-                        println!("data")
-                    }
-                }
-            }
-            Err(error) => {
-                println!("{error}");
-            }
-        }
-    }
-    Ok(())
-}
+mod utf8sequence;
 
-enum FileClassifications {
+use std::{
+    collections::HashMap,
+    error::Error,
+    fs::File,
+    io::{BufRead, BufReader, Error as IOError, ErrorKind},
+    path::*,
+    vec::Vec,
+};
+
+use utf8sequence::*;
+
+enum FileType {
     Empty,
     Ascii,
     Latin1,
@@ -47,79 +19,131 @@ enum FileClassifications {
     Data,
 }
 
-fn classify_file(file: Vec<u8>) -> FileClassifications {
-    if file.is_empty() {
-        return FileClassifications::Empty;
+type FileState = Result<FileType, IOError>;
+
+pub fn file() -> Result<(), Box<dyn Error>> {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.is_empty() {
+        eprintln!("Invalid number of arguments.");
+        return Err(IOError::from(ErrorKind::InvalidInput).into());
     }
-    if file.is_ascii() {
-        return FileClassifications::Ascii;
+    let mut file_paths: Vec<PathBuf> = Vec::with_capacity(args.len());
+    let mut file_states: HashMap<PathBuf, FileState> = HashMap::with_capacity(args.len());
+    for arg in args {
+        let path = Path::new(&arg);
+        match path.try_exists() {
+            Ok(result) => {
+                if !result {
+                    file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
+                    continue;
+                }
+            }
+            Err(error) => {
+                file_states.insert(path.to_owned(), Err(error));
+                continue;
+            }
+        }
+        if !path.is_file() {
+            file_states.insert(path.to_owned(), Err(IOError::from(ErrorKind::NotFound)));
+        }
+        file_paths.push(path.to_owned());
     }
-    if std::str::from_utf8(&file).is_ok() {
-        return FileClassifications::Utf8;
+    let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(file_paths.len());
+    for path in file_paths {
+        let possible_file = File::open(&path);
+        let file = match possible_file {
+            Ok(data) => data,
+            Err(error) => {
+                file_states.insert(path, Err(error));
+                continue;
+            }
+        };
+        files.push((path, BufReader::new(file)));
     }
-    if file.iter().all(|c| c.is_ascii() || *c >= 0xA0u8) {
-        return FileClassifications::Latin1;
+    for (path, file) in files {
+        file_states.insert(path, classify_file(file));
     }
-    FileClassifications::Data
+    for (path, file_result) in file_states {
+        print!("{}: ", path.display());
+        let message = match file_result {
+            Ok(file_type) => match file_type {
+                FileType::Empty => String::from("empty"),
+                FileType::Ascii => String::from("ASCII text"),
+                FileType::Latin1 => String::from("ISO 8859-1 text"),
+                FileType::Utf8 => String::from("UTF-8 text"),
+                FileType::Data => String::from("data"),
+            },
+            Err(error) => error.to_string(),
+        };
+        println!("{}", message);
+    }
+    Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use std::ffi::OsString;
+const fn is_byte_ascii(byte: u8) -> bool {
+    (byte >= 0x07 && byte <= 0x0D) || byte == 0x1B || (byte >= 0x20 && byte <= 0x7E)
+}
 
-    use crate::file;
+const fn is_byte_latin1(byte: u8) -> bool {
+    is_byte_ascii(byte) || byte >= 0xA0
+}
 
-    #[test]
-    fn no_args() {
-        assert!(file(vec![]).is_err());
+fn classify_file(mut file: BufReader<File>) -> FileState {
+    let mut is_ascii = true;
+    let mut is_latin1 = true;
+    let mut is_utf8 = true;
+    let mut sequence_option: Option<Utf8Sequence> = None;
+    let mut buffer = file.fill_buf()?;
+    if buffer.is_empty() {
+        return Ok(FileType::Empty);
     }
-
-    #[test]
-    fn invalid_arg() {
-        assert!(file(vec![OsString::from("foo")]).is_ok());
+    while !buffer.is_empty() {
+        for &byte in buffer {
+            if is_ascii && !is_byte_ascii(byte) {
+                is_ascii = false;
+            }
+            if is_latin1 && !is_byte_latin1(byte) {
+                is_latin1 = false;
+            }
+            if is_utf8 {
+                if sequence_option.is_none() {
+                    match Utf8Sequence::build(byte) {
+                        None => is_utf8 = false,
+                        Some(data) => sequence_option = Some(data),
+                    }
+                } else if let Some(data) = &mut sequence_option {
+                    if data.current_len() < data.full_len() && !data.add_byte(byte) {
+                        is_utf8 = false;
+                    }
+                }
+                let Some(ref sequence) = sequence_option else {
+                    unreachable!()
+                };
+                if is_utf8 && sequence.full_len() == sequence.current_len() {
+                    if !sequence.is_valid_codepoint() {
+                        is_utf8 = false;
+                    }
+                    sequence_option = None;
+                }
+            }
+            if !is_ascii && !is_latin1 && !is_utf8 {
+                return Ok(FileType::Data);
+            }
+        }
+        let buffer_length = buffer.len();
+        file.consume(buffer_length);
+        buffer = file.fill_buf()?;
     }
-
-    #[test]
-    fn unreadable() {
-        assert!(file(vec![OsString::from("./test_files/noread")]).is_ok());
+    if is_utf8 && sequence_option.is_some() {
+        is_utf8 = false;
     }
-
-    #[test]
-    fn test_data() {
-        assert!(file(vec![OsString::from("./test_files/data.data")]).is_ok());
-    }
-
-    #[test]
-    fn test_empty() {
-        assert!(file(vec![OsString::from("./test_files/empty")]).is_ok());
-    }
-
-    #[test]
-    fn test_iso() {
-        assert!(file(vec![OsString::from("./test_files/iso8859-1.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_ascii() {
-        assert!(file(vec![OsString::from("./test_files/ascii.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_utf8() {
-        assert!(file(vec![OsString::from("./test_files/utf8.txt")]).is_ok());
-    }
-
-    #[test]
-    fn test_all() {
-        assert!(file(vec![
-            OsString::from("foo"),
-            OsString::from("./test_files/noread"),
-            OsString::from("./test_files/data.data"),
-            OsString::from("./test_files/empty"),
-            OsString::from("./test_files/iso8859-1.txt"),
-            OsString::from("./test_files/ascii.txt"),
-            OsString::from("./test_files/utf8.txt")
-        ])
-        .is_ok());
+    if is_ascii {
+        Ok(FileType::Ascii)
+    } else if is_utf8 {
+        Ok(FileType::Utf8)
+    } else if is_latin1 {
+        Ok(FileType::Latin1)
+    } else {
+        Ok(FileType::Data)
     }
 }
