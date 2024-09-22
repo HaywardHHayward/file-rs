@@ -5,11 +5,13 @@ use std::{
     fs::File,
     io::{BufReader, Error as IOError, ErrorKind, Read, Seek, SeekFrom},
     path::*,
+    sync::{Arc, Mutex}, thread,
     vec::Vec,
 };
 
 use utf8sequence::*;
 
+#[derive(Debug)]
 enum FileType {
     Empty,
     Ascii,
@@ -39,8 +41,25 @@ pub fn file() -> Result<(), IOError> {
         };
         files.push((path.to_owned(), BufReader::new(file)));
     }
-    for (path, file) in files {
-        file_states.insert(path, classify_file(file));
+    if files.len() <= 1 {
+        for (path, file) in files {
+            file_states.insert(path, classify_file(file));
+        }
+    } else {
+        let shared_map = Arc::new(Mutex::new(file_states));
+        let mut thread_pool = Vec::with_capacity(files.len());
+        for (path, file) in files {
+            let map_copy = shared_map.clone();
+            thread_pool.push(thread::spawn(move || {
+                let data = classify_file(file);
+                let mut map = map_copy.lock().unwrap();
+                map.insert(path, data);
+            }));
+        }
+        for thread in thread_pool {
+            thread.join().unwrap();
+        }
+        file_states = Arc::try_unwrap(shared_map).unwrap().into_inner().unwrap();
     }
     for (path, file_result) in file_states {
         print!("{}: ", path.display());
@@ -68,9 +87,7 @@ const fn is_byte_latin1(byte: u8) -> bool {
 }
 
 fn classify_file(mut file: BufReader<File>) -> FileState {
-    let mut is_ascii = true;
-    let mut is_latin1 = true;
-    let mut is_utf8 = true;
+    let [mut is_ascii, mut is_latin1, mut is_utf8] = [true; 3];
     let mut sequence_option: Option<Utf8Sequence> = None;
     let length = file.seek(SeekFrom::End(0))?;
     if length == 0 {
@@ -98,9 +115,7 @@ fn classify_file(mut file: BufReader<File>) -> FileState {
                 }
             }
             if is_utf8 {
-                let Some(ref sequence) = sequence_option else {
-                    unreachable!()
-                };
+                let sequence = sequence_option.as_ref().unwrap();
                 if sequence.full_len() == sequence.current_len() {
                     if !sequence.is_valid_codepoint() {
                         is_utf8 = false;

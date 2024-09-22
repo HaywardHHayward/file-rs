@@ -65,7 +65,7 @@ impl Utf8Sequence {
     pub fn current_len(&self) -> usize {
         self.bytes.len()
     }
-    pub fn full_len(&self) -> usize {
+    pub const fn full_len(&self) -> usize {
         self.length as usize
     }
 }
