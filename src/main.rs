@@ -1,9 +1,8 @@
 use file::file;
 
-fn main() -> Result<(), std::io::Error> {
+fn main() {
     let results = file();
     if results.is_err() {
-        eprintln!("Usage: file [files]");
+        eprintln!("{}. Usage: file [files]", results.unwrap_err());
     }
-    results
 }

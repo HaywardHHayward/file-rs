@@ -5,8 +5,8 @@ pub struct Utf8Sequence {
 }
 
 impl Utf8Sequence {
-    pub fn build(byte: u8) -> Option<Self> {
-        let length = match byte.leading_ones() {
+    pub const fn build(byte: u8) -> Option<Self> {
+        let full_length = match byte.leading_ones() {
             0 => 1,
             n @ 2..=4 => n,
             _ => return None,
@@ -17,7 +17,7 @@ impl Utf8Sequence {
         let mut bytes: [u8; 4] = [0; 4];
         bytes[0] = byte;
         Some(Self {
-            full_length: length,
+            full_length,
             current_length: 1,
             bytes,
         })
@@ -34,7 +34,7 @@ impl Utf8Sequence {
         true
     }
     pub const fn is_invalid(byte: u8) -> bool {
-        byte == 0xC0 || byte == 0xC1 || byte >= 0xF5
+        matches!(byte, 0xC0 | 0xC1 | 0xF5..)
     }
     pub fn get_codepoint(&self) -> Option<u32> {
         let mut codepoint: u32 = self.bytes[0] as u32;
@@ -66,7 +66,7 @@ impl Utf8Sequence {
         }
     }
 
-    pub fn current_len(&self) -> usize {
+    pub const fn current_len(&self) -> usize {
         self.current_length as usize
     }
     pub const fn full_len(&self) -> usize {

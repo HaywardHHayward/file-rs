@@ -5,7 +5,7 @@ use std::{
     fs::File,
     io::{BufReader, Error as IOError, ErrorKind, Read},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Mutex,
     thread,
     vec::Vec,
 };
@@ -25,8 +25,10 @@ type FileState = Result<FileType, IOError>;
 pub fn file() -> Result<(), IOError> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.is_empty() {
-        eprintln!("Invalid number of arguments.");
-        return Err(IOError::from(ErrorKind::InvalidInput));
+        return Err(IOError::new(
+            ErrorKind::InvalidInput,
+            "Invalid number of arguments",
+        ));
     }
     let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(args.len());
     let mut file_states: HashMap<PathBuf, FileState> = HashMap::with_capacity(args.len());
@@ -52,39 +54,30 @@ pub fn file() -> Result<(), IOError> {
         }
         files.push((path.to_owned(), BufReader::new(file)));
     }
-    if files.len() <= 1 {
+    let shared_map = Mutex::new(file_states);
+    thread::scope(|s| {
         for (path, file) in files {
-            file_states.insert(path, classify_file(file));
-        }
-    } else {
-        let shared_map = Arc::new(Mutex::new(file_states));
-        let mut thread_pool = Vec::with_capacity(files.len());
-        for (path, file) in files {
-            let map_copy = shared_map.clone();
-            thread_pool.push(thread::spawn(move || {
+            s.spawn(|| {
                 let data = classify_file(file);
-                let mut locked_map = map_copy.lock().unwrap();
+                let mut locked_map = shared_map.lock().unwrap();
                 locked_map.insert(path, data);
-            }));
+            });
         }
-        for thread in thread_pool {
-            thread.join().expect("thread panicked");
-        }
-        file_states = Arc::into_inner(shared_map).unwrap().into_inner().unwrap();
-    }
+    });
+    file_states = shared_map.into_inner().unwrap();
     for (path, file_result) in file_states {
         print!("{}: ", path.display());
         let message = match file_result {
             Ok(file_type) => match file_type {
-                FileType::Empty => String::from("empty"),
-                FileType::Ascii => String::from("ASCII text"),
-                FileType::Latin1 => String::from("ISO 8859-1 text"),
-                FileType::Utf8 => String::from("UTF-8 text"),
-                FileType::Data => String::from("data"),
+                FileType::Empty => "empty",
+                FileType::Ascii => "ASCII text",
+                FileType::Latin1 => "ISO 8859-1 text",
+                FileType::Utf8 => "UTF-8 text",
+                FileType::Data => "data",
             },
-            Err(error) => error.to_string(),
+            Err(error) => &error.to_string(),
         };
-        println!("{}", message);
+        println!("{message}");
     }
     Ok(())
 }
@@ -133,20 +126,21 @@ fn classify_file(file: BufReader<File>) -> FileState {
                 sequence_option = None;
             }
         }
-        if !is_latin1 && !is_utf8 && !is_ascii {
+        if !is_ascii && !is_utf8 && !is_latin1 {
             return Ok(FileType::Data);
         }
+    }
+    if is_ascii {
+        return Ok(FileType::Ascii);
     }
     if sequence_option.is_some() {
         is_utf8 = false;
     }
-    if is_ascii {
-        Ok(FileType::Ascii)
-    } else if is_utf8 {
-        Ok(FileType::Utf8)
-    } else if is_latin1 {
-        Ok(FileType::Latin1)
-    } else {
-        Ok(FileType::Data)
+    if is_utf8 {
+        return Ok(FileType::Utf8);
     }
+    if is_latin1 {
+        return Ok(FileType::Latin1);
+    }
+    Ok(FileType::Data)
 }
