@@ -1,3 +1,4 @@
+mod utf16sequence;
 mod utf8sequence;
 
 use std::{
@@ -12,11 +13,14 @@ use std::{
 
 use utf8sequence::*;
 
+use crate::utf16sequence::{Endianness, Utf16Sequence};
+
 enum FileType {
     Empty,
     Ascii,
     Latin1,
     Utf8,
+    Utf16,
     Data,
 }
 
@@ -73,6 +77,7 @@ pub fn file() -> Result<(), IOError> {
                 FileType::Ascii => "ASCII text",
                 FileType::Latin1 => "ISO 8859-1 text",
                 FileType::Utf8 => "UTF-8 text",
+                FileType::Utf16 => "UTF-16 text",
                 FileType::Data => "data",
             },
             Err(error) => &error.to_string(),
@@ -91,11 +96,35 @@ const fn is_byte_latin1(byte: u8) -> bool {
 }
 
 fn classify_file(file: BufReader<File>) -> FileState {
-    let [mut is_ascii, mut is_latin1, mut is_utf8] = [true; 3];
-    let mut sequence_option: Option<Utf8Sequence> = None;
+    let [mut is_ascii, mut is_latin1, mut is_utf8, mut is_utf16] = [true; 4];
+    let mut utf8_sequence: Option<Utf8Sequence> = None;
+    let mut utf16_sequence: Option<Utf16Sequence> = None;
+    let mut endianness = Endianness::LittleEndian;
+    let mut utf16_buffer: [u8; 2] = [0, 0];
+    let mut bytes_read: usize = 0;
     let file_bytes = file.bytes();
     for result_byte in file_bytes {
         let byte = result_byte?;
+        if is_utf16 {
+            if bytes_read < 2 {
+                utf16_buffer[bytes_read] = byte;
+                bytes_read += 1;
+                if bytes_read == 2 {
+                    set_endianness(&mut utf16_sequence, &mut endianness, utf16_buffer);
+                }
+            } else if bytes_read % 2 < 2 {
+                utf16_buffer[bytes_read % 2] = byte;
+                bytes_read += 1;
+                if bytes_read % 2 == 0 {
+                    validate_utf16_sequence(
+                        &mut is_utf16,
+                        &mut utf16_sequence,
+                        endianness,
+                        utf16_buffer,
+                    );
+                }
+            }
+        }
         if is_ascii && !is_byte_ascii(byte) {
             is_ascii = false;
         }
@@ -103,44 +132,87 @@ fn classify_file(file: BufReader<File>) -> FileState {
             is_latin1 = false;
         }
         if !is_ascii && is_utf8 {
-            if sequence_option.is_none() {
+            if utf8_sequence.is_none() {
                 match Utf8Sequence::build(byte) {
                     None => {
                         is_utf8 = false;
                         continue;
                     }
-                    Some(data) => sequence_option = Some(data),
+                    Some(data) => utf8_sequence = Some(data),
                 }
             } else {
-                let data = sequence_option.as_mut().unwrap();
+                let data = utf8_sequence.as_mut().unwrap();
                 if data.current_len() < data.full_len() && !data.add_byte(byte) {
                     is_utf8 = false;
                     continue;
                 }
             }
-            let sequence = sequence_option.as_ref().unwrap();
+            let sequence = utf8_sequence.as_ref().unwrap();
             if sequence.full_len() == sequence.current_len() {
                 if !sequence.is_valid_codepoint() {
                     is_utf8 = false;
                 }
-                sequence_option = None;
+                utf8_sequence = None;
             }
         }
-        if !is_ascii && !is_utf8 && !is_latin1 {
+        if !is_ascii && !is_utf8 && !is_latin1 && !is_utf16 {
             return Ok(FileType::Data);
         }
     }
     if is_ascii {
         return Ok(FileType::Ascii);
     }
-    if sequence_option.is_some() {
+    if utf8_sequence.is_some() {
         is_utf8 = false;
     }
     if is_utf8 {
         return Ok(FileType::Utf8);
     }
+    if utf16_sequence.is_some() {
+        is_utf16 = false;
+    }
+    if is_utf16 {
+        return Ok(FileType::Utf16);
+    }
     if is_latin1 {
         return Ok(FileType::Latin1);
     }
-    Ok(FileType::Data)
+    return Ok(FileType::Data);
+
+    fn set_endianness(
+        utf16_sequence: &mut Option<Utf16Sequence>,
+        endianness: &mut Endianness,
+        utf16_buffer: [u8; 2],
+    ) {
+        let be = u16::from_be_bytes(utf16_buffer);
+        let le = u16::from_le_bytes(utf16_buffer);
+        if be == 0xFEFF {
+            *endianness = Endianness::BigEndian
+        } else if le == 0xFEFF {
+            *endianness = Endianness::LittleEndian
+        } else {
+            *endianness = Endianness::LittleEndian;
+            *utf16_sequence = Some(Utf16Sequence::build(utf16_buffer, *endianness));
+        }
+    }
+
+    fn validate_utf16_sequence(
+        is_utf16: &mut bool,
+        utf16_sequence: &mut Option<Utf16Sequence>,
+        endianness: Endianness,
+        utf16_buffer: [u8; 2],
+    ) {
+        if let Some(ref mut sequence) = utf16_sequence {
+            if !sequence.add_bytes(utf16_buffer) {
+                *is_utf16 = false;
+            }
+            *utf16_sequence = None;
+        } else {
+            *utf16_sequence = Some(Utf16Sequence::build(utf16_buffer, endianness));
+            if !utf16_sequence.as_ref().unwrap().is_surrogate() {
+                *is_utf16 = utf16_sequence.as_ref().unwrap().is_valid();
+                *utf16_sequence = None;
+            }
+        }
+    }
 }
