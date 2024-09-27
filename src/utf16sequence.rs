@@ -29,18 +29,23 @@ impl Utf for Utf16Sequence {
     type Point = [u8; 2];
     type Codepoint = Utf16Type;
 
+    #[inline]
     fn get_codepoint(&self) -> Self::Codepoint {
-        let from_bytes: fn([u8; 2]) -> u16 = match self.endianness {
-            Endianness::BigEndian => u16::from_be_bytes,
-            Endianness::LittleEndian => u16::from_le_bytes,
+        let high = match self.endianness {
+            Endianness::BigEndian => u16::from_be_bytes([self.bytes[0], self.bytes[1]]),
+            Endianness::LittleEndian => u16::from_le_bytes([self.bytes[0], self.bytes[1]]),
         };
         if self.is_surrogate {
-            let high = from_bytes([self.bytes[0], self.bytes[1]]) as u32;
-            let low = from_bytes([self.bytes[2], self.bytes[3]]) as u32;
-            return Utf16Type::Surrogate(((high - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000);
+            let low = match self.endianness {
+                Endianness::BigEndian => u16::from_be_bytes([self.bytes[2], self.bytes[3]]),
+                Endianness::LittleEndian => u16::from_le_bytes([self.bytes[2], self.bytes[3]]),
+            } as u32;
+            Utf16Type::Surrogate((((high as u32) - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000)
+        } else {
+            Utf16Type::Bmp(high)
         }
-        Utf16Type::Bmp(from_bytes([self.bytes[0], self.bytes[1]]))
     }
+    #[inline]
     fn add_point(&mut self, point: Self::Point) -> bool {
         if !self.is_surrogate {
             return false;
@@ -52,6 +57,7 @@ impl Utf for Utf16Sequence {
         self.bytes[3] = point[1];
         true
     }
+    #[inline]
     fn is_valid(&self) -> bool {
         match self.get_codepoint() {
             Utf16Type::Surrogate(value) => {

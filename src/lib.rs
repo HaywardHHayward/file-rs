@@ -4,6 +4,7 @@ mod utf8sequence;
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fs::File,
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
     path::{Path, PathBuf},
@@ -25,7 +26,7 @@ enum BufferType {
 type BufferState = Result<BufferType, IOError>;
 
 pub fn file() -> Result<(), IOError> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     if args.is_empty() {
         return Err(IOError::new(
             ErrorKind::InvalidInput,
@@ -125,29 +126,23 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
         if !is_ascii && is_utf8 {
             validate_utf8(&mut is_utf8, &mut utf8_sequence, byte);
         }
-        if !is_ascii && !is_utf8 && !is_latin1 && !is_utf16 {
+        if !is_ascii && !is_utf16 && !is_utf8 && !is_latin1 {
             return Ok(BufferType::Data);
         }
-    }
-    if is_ascii {
-        return Ok(BufferType::Ascii);
     }
     if utf16_sequence.is_some() {
         is_utf16 = false;
     }
-    if is_utf16 {
-        return Ok(BufferType::Utf16);
-    }
     if utf8_sequence.is_some() {
         is_utf8 = false;
     }
-    if is_utf8 {
-        return Ok(BufferType::Utf8);
-    }
-    if is_latin1 {
-        return Ok(BufferType::Latin1);
-    }
-    return Ok(BufferType::Data);
+    return match [is_ascii, is_utf16, is_utf8, is_latin1] {
+        [true, _, _, _] => Ok(BufferType::Ascii),
+        [_, true, _, _] => Ok(BufferType::Utf16),
+        [_, _, true, _] => Ok(BufferType::Utf8),
+        [_, _, _, true] => Ok(BufferType::Latin1),
+        [_, _, _, _] => Ok(BufferType::Data),
+    };
 
     #[inline]
     fn validate_utf8(is_utf8: &mut bool, utf8_sequence: &mut Option<Utf8Sequence>, byte: u8) {
@@ -202,7 +197,7 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
             endianness: Endianness,
             utf16_buffer: [u8; 2],
         ) {
-            if let Some(ref mut sequence) = utf16_sequence {
+            if let Some(sequence) = utf16_sequence.as_mut() {
                 if !sequence.add_point(utf16_buffer) {
                     *is_utf16 = false;
                 }
