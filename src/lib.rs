@@ -10,7 +10,6 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
     thread,
-    vec::Vec,
 };
 
 use crate::{utf::*, utf16sequence::*, utf8sequence::*};
@@ -101,8 +100,7 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
     let mut endianness = Endianness::LittleEndian;
     let mut utf16_buffer: [u8; 2] = [0, 0];
     let mut bytes_read = 0;
-    let reader_bytes = reader.bytes();
-    for result_byte in reader_bytes {
+    for result_byte in reader.bytes() {
         let byte = result_byte?;
         if is_utf16 {
             utf16_buffer[bytes_read % 2] = byte;

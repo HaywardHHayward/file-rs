@@ -12,7 +12,7 @@ pub const fn is_text(codepoint: u32) -> bool {
     if char::from_u32(codepoint).is_none() {
         return false;
     }
-    if (codepoint < 255)
+    if (codepoint < 0xFF)
         && !(0x08 <= codepoint && 0x0D >= codepoint)
         && codepoint != 0x1B
         && !(0x20 <= codepoint && 0x7E >= codepoint)

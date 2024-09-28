@@ -18,7 +18,7 @@ impl Utf for Utf8Sequence {
     #[inline]
     fn get_codepoint(&self) -> Self::Codepoint {
         let mut codepoint: u32 = match self.utf8_type {
-            Utf8Type::Ascii(value) => value[0],
+            Utf8Type::Ascii(value) => return value[0] as u32,
             Utf8Type::Western(bytes) => bytes[0] ^ 0b1100_0000,
             Utf8Type::Bmp(bytes) => bytes[0] ^ 0b1110_0000,
             Utf8Type::Other(bytes) => bytes[0] ^ 0b1111_0000,
@@ -76,6 +76,7 @@ impl Utf8Sequence {
             current_length: 1,
         })
     }
+    #[inline]
     const fn get(&self, index: usize) -> Option<u8> {
         match self.utf8_type {
             Utf8Type::Ascii(value) => {
@@ -104,6 +105,7 @@ impl Utf8Sequence {
             }
         }
     }
+    #[inline]
     fn get_mut(&mut self, index: usize) -> Option<&mut u8> {
         match self.utf8_type {
             Utf8Type::Ascii(ref mut value) => {
