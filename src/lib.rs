@@ -1,18 +1,17 @@
 mod utf;
-mod utf16sequence;
-mod utf8sequence;
 
 use std::{
     collections::BTreeMap,
-    ffi::OsString,
     fs::File,
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Mutex,
     thread,
 };
 
-use crate::{utf::*, utf16sequence::*, utf8sequence::*};
+use utf::{utf16sequence::*, utf8sequence::*};
+
+use crate::utf::*;
 
 enum BufferType {
     Empty,
@@ -25,48 +24,47 @@ enum BufferType {
 type BufferState = Result<BufferType, IOError>;
 
 pub fn file() -> Result<(), IOError> {
-    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
-    if args.is_empty() {
+    let args = std::env::args_os().skip(1);
+    if args.len() == 0 {
         return Err(IOError::new(
             ErrorKind::InvalidInput,
             "Invalid number of arguments",
         ));
     }
-    let mut files: Vec<(PathBuf, BufReader<File>)> = Vec::with_capacity(args.len());
-    let mut file_states: BTreeMap<PathBuf, BufferState> = BTreeMap::new();
-    for arg in args {
-        let path = Path::new(&arg);
-        let file = match File::open(path) {
-            Ok(data) => data,
-            Err(error) => {
-                file_states.insert(path.to_owned(), Err(error));
-                continue;
-            }
-        };
-        let metadata = match std::fs::metadata(path) {
-            Ok(data) => data,
-            Err(error) => {
-                file_states.insert(path.to_owned(), Err(error));
-                continue;
-            }
-        };
-        if metadata.len() == 0 {
-            file_states.insert(path.to_owned(), Ok(BufferType::Empty));
-            continue;
-        }
-        files.push((path.to_owned(), BufReader::new(file)));
-    }
-    let shared_map = Mutex::new(file_states);
+    let shared_file_states = Mutex::new(BTreeMap::new());
     thread::scope(|s| {
-        for (path, file) in files {
+        for arg in args {
             s.spawn(|| {
-                let data = classify_file(file);
-                let mut locked_map = shared_map.lock().unwrap();
-                locked_map.insert(path, data);
+                let path = PathBuf::from(arg);
+                match std::fs::metadata(&path) {
+                    Ok(path_metadata) => {
+                        if path_metadata.len() == 0 {
+                            let mut file_states = shared_file_states.lock().unwrap();
+                            file_states.insert(path, Ok(BufferType::Empty));
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let mut file_states = shared_file_states.lock().unwrap();
+                        file_states.insert(path, Err(error));
+                        return;
+                    }
+                };
+                let file = match File::open(&path) {
+                    Ok(open_file) => open_file,
+                    Err(error) => {
+                        let mut file_states = shared_file_states.lock().unwrap();
+                        file_states.insert(path, Err(error));
+                        return;
+                    }
+                };
+                let data = classify_file(BufReader::new(file));
+                let mut file_states = shared_file_states.lock().unwrap();
+                file_states.insert(path, data);
             });
         }
     });
-    file_states = shared_map.into_inner().unwrap();
+    let file_states = shared_file_states.into_inner().unwrap();
     for (path, file_result) in file_states {
         print!("{}: ", path.display());
         let message = match file_result {
@@ -94,7 +92,10 @@ const fn is_byte_latin1(byte: u8) -> bool {
 }
 
 fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
-    let [mut is_ascii, mut is_latin1, mut is_utf8, mut is_utf16] = [true; 4];
+    let mut is_ascii = true;
+    let mut is_latin1 = true;
+    let mut is_utf8 = true;
+    let mut is_utf16 = true;
     let mut utf8_sequence: Option<Utf8Sequence> = None;
     let mut utf16_sequence: Option<Utf16Sequence> = None;
     let mut endianness = Endianness::LittleEndian;
@@ -209,5 +210,65 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ascii() {
+        let ascii: [&[u8]; 2] = [
+            include_bytes!("../test_files/ascii.txt").as_slice(),
+            include_bytes!("../test_files/harpers_ASCII.txt"),
+        ];
+        let result = ascii.map(|bytes| classify_file(BufReader::new(bytes)));
+        assert!(result
+            .iter()
+            .all(|state| matches!(state, Ok(BufferType::Ascii))));
+    }
+    #[test]
+    fn test_latin1() {
+        let latin1: [&[u8]; 3] = [
+            include_bytes!("../test_files/iso8859-1.txt"),
+            include_bytes!("../test_files/die_ISO-8859-1.txt"),
+            include_bytes!("../test_files/portugal_ISO-8859-1.txt"),
+        ];
+        let result = latin1.map(|bytes| classify_file(BufReader::new(bytes)));
+        assert!(result
+            .iter()
+            .all(|state| matches!(state, Ok(BufferType::Latin1))))
+    }
+    #[test]
+    fn test_utf8() {
+        let utf8: [&[u8]; 3] = [
+            include_bytes!("../test_files/utf8.txt"),
+            include_bytes!("../test_files/utf8_test.txt"),
+            include_bytes!("../test_files/shisei_UTF-8.txt"),
+        ];
+        let result = utf8.map(|bytes| classify_file(BufReader::new(bytes)));
+        assert!(result
+            .iter()
+            .all(|state| matches!(state, Ok(BufferType::Utf8))));
+    }
+    #[test]
+    fn test_utf16() {
+        let utf16: [&[u8]; 2] = [
+            include_bytes!("../test_files/le_utf16.txt"),
+            include_bytes!("../test_files/be_utf16.txt"),
+        ];
+        let result = utf16.map(|bytes| classify_file(BufReader::new(bytes)));
+        assert!(result
+            .iter()
+            .all(|state| matches!(state, Ok(BufferType::Utf16))));
+    }
+    #[test]
+    fn test_data() {
+        let data: &[u8] = include_bytes!("../test_files/data.data");
+        assert!(matches!(
+            classify_file(BufReader::new(data)),
+            Ok(BufferType::Data)
+        ));
     }
 }

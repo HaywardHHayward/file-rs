@@ -1,9 +1,4 @@
 use crate::utf::*;
-#[derive(Copy, Clone)]
-pub enum Endianness {
-    BigEndian,
-    LittleEndian,
-}
 
 pub enum Utf16Type {
     Surrogate(u32),

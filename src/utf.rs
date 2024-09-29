@@ -1,3 +1,6 @@
+pub mod utf16sequence;
+pub mod utf8sequence;
+
 pub trait Utf {
     type Point;
     type Codepoint;
@@ -21,4 +24,10 @@ pub const fn is_text(codepoint: u32) -> bool {
         return false;
     }
     true
+}
+
+#[derive(Copy, Clone)]
+pub enum Endianness {
+    BigEndian,
+    LittleEndian,
 }
