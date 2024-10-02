@@ -2,6 +2,7 @@ mod utf;
 
 use std::{
     collections::BTreeMap,
+    ffi::OsString,
     fs::File,
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
     path::PathBuf,
@@ -9,9 +10,7 @@ use std::{
     thread,
 };
 
-use utf::{utf16sequence::*, utf8sequence::*};
-
-use crate::utf::*;
+use utf::{utf16sequence::*, utf8sequence::*, *};
 
 enum BufferType {
     Empty,
@@ -23,8 +22,7 @@ enum BufferType {
 }
 type BufferState = Result<BufferType, IOError>;
 
-pub fn file() -> Result<(), IOError> {
-    let args = std::env::args_os().skip(1);
+pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError> {
     if args.len() == 0 {
         return Err(IOError::new(
             ErrorKind::InvalidInput,
@@ -91,11 +89,10 @@ const fn is_byte_latin1(byte: u8) -> bool {
     is_byte_ascii(byte) || byte >= 0xA0
 }
 
-fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
+fn classify_file(reader: impl BufRead) -> BufferState {
     let mut is_ascii = true;
     let mut is_latin1 = true;
-    let mut is_utf8 = true;
-    let mut is_utf16 = true;
+    let [mut is_utf8, mut is_utf16] = [true; 2];
     let mut utf8_sequence: Option<Utf8Sequence> = None;
     let mut utf16_sequence: Option<Utf16Sequence> = None;
     let mut endianness = Endianness::LittleEndian;
@@ -103,9 +100,9 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
     let mut bytes_read = 0;
     for result_byte in reader.bytes() {
         let byte = result_byte?;
+        bytes_read += 1;
         if is_utf16 {
-            utf16_buffer[bytes_read % 2] = byte;
-            bytes_read += 1;
+            utf16_buffer[(bytes_read - 1) % 2] = byte;
             if bytes_read % 2 == 0 {
                 validate_utf16(
                     &mut is_utf16,
@@ -119,11 +116,11 @@ fn classify_file<T: Read>(reader: BufReader<T>) -> BufferState {
         if is_ascii && !is_byte_ascii(byte) {
             is_ascii = false;
         }
-        if !is_ascii && is_latin1 && !is_byte_latin1(byte) {
-            is_latin1 = false;
-        }
         if !is_ascii && is_utf8 {
             validate_utf8(&mut is_utf8, &mut utf8_sequence, byte);
+        }
+        if !is_ascii && is_latin1 && !is_byte_latin1(byte) {
+            is_latin1 = false;
         }
         if !is_ascii && !is_utf16 && !is_utf8 && !is_latin1 {
             return Ok(BufferType::Data);

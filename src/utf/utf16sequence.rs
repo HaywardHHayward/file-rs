@@ -67,6 +67,7 @@ impl Utf for Utf16Sequence {
 }
 
 impl Utf16Sequence {
+    #[inline]
     pub const fn new(bytes: [u8; 2], endianness: Endianness) -> Self {
         let is_surrogate = match endianness {
             Endianness::BigEndian => {
@@ -84,6 +85,7 @@ impl Utf16Sequence {
             endianness,
         }
     }
+    #[inline]
     pub const fn bytes_to_u16(bytes: [u8; 2], endianness: Endianness) -> u16 {
         match endianness {
             Endianness::BigEndian => u16::from_be_bytes([bytes[0], bytes[1]]),
