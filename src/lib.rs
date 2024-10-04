@@ -1,3 +1,4 @@
+mod gbsequence;
 mod utf;
 
 use std::{
@@ -12,12 +13,15 @@ use std::{
 
 use utf::{utf16sequence::*, utf8sequence::*, *};
 
+use crate::gbsequence::GbSequence;
+
 enum BufferType {
     Empty,
     Ascii,
     Latin1,
     Utf8,
     Utf16,
+    Gb,
     Data,
 }
 type BufferState = Result<BufferType, IOError>;
@@ -70,6 +74,7 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
                 BufferType::Empty => "empty",
                 BufferType::Ascii => "ASCII text",
                 BufferType::Latin1 => "ISO 8859-1 text",
+                BufferType::Gb => "GB 18030 text",
                 BufferType::Utf8 => "UTF-8 text",
                 BufferType::Utf16 => "UTF-16 text",
                 BufferType::Data => "data",
@@ -93,10 +98,12 @@ fn classify_file(reader: impl BufRead) -> BufferState {
     let mut is_ascii = true;
     let mut is_latin1 = true;
     let [mut is_utf8, mut is_utf16] = [true; 2];
+    let mut is_gb = true;
     let mut utf8_sequence: Option<Utf8Sequence> = None;
     let mut utf16_sequence: Option<Utf16Sequence> = None;
+    let mut gb_sequence: Option<GbSequence> = None;
     let mut endianness = Endianness::LittleEndian;
-    let mut utf16_buffer: [u8; 2] = [0, 0];
+    let mut utf16_buffer: [u8; 2] = [0; 2];
     let mut bytes_read = 0;
     for result_byte in reader.bytes() {
         let byte = result_byte?;
@@ -113,6 +120,26 @@ fn classify_file(reader: impl BufRead) -> BufferState {
                 );
             }
         }
+        if is_gb {
+            if gb_sequence.is_none() {
+                if let Some(sequence) = GbSequence::build(byte) {
+                    if !sequence.is_complete() {
+                        gb_sequence = Some(sequence);
+                    } else {
+                        is_gb = is_byte_ascii(byte);
+                    }
+                } else {
+                    is_gb = false;
+                }
+            } else {
+                let sequence = gb_sequence.as_mut().unwrap();
+                if !sequence.add_codepoint(byte) {
+                    is_gb = false;
+                } else if sequence.is_complete() {
+                    gb_sequence = None;
+                }
+            }
+        }
         if is_ascii && !is_byte_ascii(byte) {
             is_ascii = false;
         }
@@ -122,7 +149,7 @@ fn classify_file(reader: impl BufRead) -> BufferState {
         if !is_ascii && is_latin1 && !is_byte_latin1(byte) {
             is_latin1 = false;
         }
-        if !is_ascii && !is_utf16 && !is_utf8 && !is_latin1 {
+        if !is_ascii && !is_utf16 && !is_utf8 && !is_latin1 && !is_gb {
             return Ok(BufferType::Data);
         }
     }
@@ -132,12 +159,16 @@ fn classify_file(reader: impl BufRead) -> BufferState {
     if utf8_sequence.is_some() {
         is_utf8 = false;
     }
-    return match [is_ascii, is_utf16, is_utf8, is_latin1] {
-        [true, _, _, _] => Ok(BufferType::Ascii),
-        [_, true, _, _] => Ok(BufferType::Utf16),
-        [_, _, true, _] => Ok(BufferType::Utf8),
-        [_, _, _, true] => Ok(BufferType::Latin1),
-        [_, _, _, _] => Ok(BufferType::Data),
+    if gb_sequence.is_some() {
+        is_gb = false;
+    }
+    return match [is_ascii, is_utf16, is_utf8, is_latin1, is_gb] {
+        [true, _, _, _, _] => Ok(BufferType::Ascii),
+        [_, true, _, _, _] => Ok(BufferType::Utf16),
+        [_, _, true, _, _] => Ok(BufferType::Utf8),
+        [_, _, _, true, _] => Ok(BufferType::Latin1),
+        [_, _, _, _, true] => Ok(BufferType::Gb),
+        [_, _, _, _, _] => Ok(BufferType::Data),
     };
 
     #[inline]
@@ -267,5 +298,13 @@ mod tests {
             classify_file(BufReader::new(data)),
             Ok(BufferType::Data)
         ));
+    }
+    #[test]
+    fn test_gb() {
+        let data: &[u8] = include_bytes!("../test_files/gb_test.txt");
+        assert!(matches!(
+            classify_file(BufReader::new(data)),
+            Ok(BufferType::Gb)
+        ))
     }
 }
