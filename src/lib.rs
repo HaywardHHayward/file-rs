@@ -1,4 +1,4 @@
-mod gbsequence;
+mod gb_sequence;
 mod utf;
 
 use std::{
@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    gbsequence::*,
+    gb_sequence::*,
     utf::{utf16sequence::*, utf8sequence::*, *},
 };
 
@@ -25,6 +25,7 @@ enum BufferType {
     Gb,
     Data,
 }
+
 type BufferState = Result<BufferType, IOError>;
 
 pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError> {
@@ -100,11 +101,11 @@ fn classify_file(reader: impl BufRead) -> BufferState {
     let mut is_latin1 = true;
     let [mut is_utf8, mut is_utf16] = [true; 2];
     let mut is_gb = true;
-    let mut utf8_sequence: Option<Utf8Sequence> = None;
-    let mut utf16_sequence: Option<Utf16Sequence> = None;
-    let mut gb_sequence: Option<GbSequence> = None;
+    let mut utf8_sequence = None;
+    let mut utf16_sequence = None;
+    let mut gb_sequence = None;
     let mut endianness = Endianness::LittleEndian;
-    let mut utf16_buffer: [u8; 2] = [0; 2];
+    let mut utf16_buffer = [0; 2];
     let mut bytes_read = 0;
     for result_byte in reader.bytes() {
         let byte = result_byte?;
@@ -157,20 +158,16 @@ fn classify_file(reader: impl BufRead) -> BufferState {
 
     #[inline]
     fn validate_utf8(is_utf8: &mut bool, utf8_sequence: &mut Option<Utf8Sequence>, byte: u8) {
-        if utf8_sequence.is_none() {
-            match Utf8Sequence::build(byte) {
-                None => {
-                    *is_utf8 = false;
-                    return;
-                }
-                Some(data) => *utf8_sequence = Some(data),
-            }
-        } else {
-            let data = utf8_sequence.as_mut().unwrap();
-            if data.current_len() < data.full_len() && !data.add_point(byte) {
+        if let Some(sequence) = utf8_sequence.as_mut() {
+            if sequence.current_len() < sequence.full_len() && !sequence.add_point(byte) {
                 *is_utf8 = false;
                 return;
             }
+        } else if let Some(sequence) = Utf8Sequence::build(byte) {
+            *utf8_sequence = Some(sequence);
+        } else {
+            *is_utf8 = false;
+            return;
         }
         let sequence = utf8_sequence.as_ref().unwrap();
         if sequence.full_len() == sequence.current_len() {
@@ -217,7 +214,7 @@ fn classify_file(reader: impl BufRead) -> BufferState {
                 *utf16_sequence = Some(Utf16Sequence::new(utf16_buffer, endianness));
                 let sequence = utf16_sequence.as_ref().unwrap();
                 if !sequence.is_surrogate() {
-                    *is_utf16 = sequence.is_valid() && is_text(sequence.get_codepoint().into());
+                    *is_utf16 = sequence.is_valid() && is_text(sequence.get_codepoint());
                     *utf16_sequence = None;
                 }
             }
@@ -225,23 +222,20 @@ fn classify_file(reader: impl BufRead) -> BufferState {
     }
     #[inline]
     fn validate_gb(is_gb: &mut bool, gb_sequence: &mut Option<GbSequence>, byte: u8) {
-        if gb_sequence.is_none() {
-            if let Some(sequence) = GbSequence::build(byte) {
-                if !sequence.is_complete() {
-                    *gb_sequence = Some(sequence);
-                } else {
-                    *is_gb = is_byte_ascii(byte);
-                }
-            } else {
-                *is_gb = false;
-            }
-        } else {
-            let sequence = gb_sequence.as_mut().unwrap();
+        if let Some(sequence) = gb_sequence.as_mut() {
             if !sequence.add_codepoint(byte) {
                 *is_gb = false;
             } else if sequence.is_complete() {
                 *gb_sequence = None;
             }
+        } else if let Some(sequence) = GbSequence::build(byte) {
+            if sequence.is_complete() {
+                *is_gb = is_byte_ascii(byte);
+            } else {
+                *gb_sequence = Some(sequence);
+            }
+        } else {
+            *is_gb = false;
         }
     }
 }
@@ -249,7 +243,6 @@ fn classify_file(reader: impl BufRead) -> BufferState {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_ascii() {
         let ascii: [&[u8]; 2] = [
@@ -306,10 +299,13 @@ mod tests {
     }
     #[test]
     fn test_gb() {
-        let data: &[u8] = include_bytes!("../test_files/gb_test.txt");
-        assert!(matches!(
-            classify_file(BufReader::new(data)),
-            Ok(BufferType::Gb)
-        ))
+        let data: [&[u8]; 2] = [
+            include_bytes!("../test_files/gb_test.txt"),
+            include_bytes!("../test_files/gb.txt"),
+        ];
+        let result = data.map(|bytes| classify_file(BufReader::new(bytes)));
+        assert!(result
+            .iter()
+            .all(|state| matches!(state, Ok(BufferType::Gb))));
     }
 }

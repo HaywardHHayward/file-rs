@@ -1,19 +1,4 @@
 use crate::utf::*;
-
-pub enum Utf16Type {
-    Surrogate(u32),
-    Bmp(u16),
-}
-
-impl From<Utf16Type> for u32 {
-    fn from(value: Utf16Type) -> Self {
-        match value {
-            Utf16Type::Surrogate(value) => value,
-            Utf16Type::Bmp(value) => value as u32,
-        }
-    }
-}
-
 pub struct Utf16Sequence {
     bytes: [u8; 4],
     is_surrogate: bool,
@@ -22,22 +7,21 @@ pub struct Utf16Sequence {
 
 impl Utf for Utf16Sequence {
     type Point = [u8; 2];
-    type Codepoint = Utf16Type;
 
     #[inline]
-    fn get_codepoint(&self) -> Self::Codepoint {
+    fn get_codepoint(&self) -> u32 {
         let high = match self.endianness {
             Endianness::BigEndian => u16::from_be_bytes([self.bytes[0], self.bytes[1]]),
             Endianness::LittleEndian => u16::from_le_bytes([self.bytes[0], self.bytes[1]]),
-        };
+        } as u32;
         if self.is_surrogate {
             let low = match self.endianness {
                 Endianness::BigEndian => u16::from_be_bytes([self.bytes[2], self.bytes[3]]),
                 Endianness::LittleEndian => u16::from_le_bytes([self.bytes[2], self.bytes[3]]),
             } as u32;
-            Utf16Type::Surrogate((((high as u32) - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000)
+            ((high - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000
         } else {
-            Utf16Type::Bmp(high)
+            high
         }
     }
     #[inline]
@@ -54,14 +38,11 @@ impl Utf for Utf16Sequence {
     }
     #[inline]
     fn is_valid(&self) -> bool {
-        match self.get_codepoint() {
-            Utf16Type::Surrogate(value) => {
-                matches!(value, 0x010000..=0x10FFFF) && is_valid_codepoint(value)
-            }
-            Utf16Type::Bmp(value) => {
-                matches!(value, 0x0000..=0xD7FF | 0xE000..=0xFFFF)
-                    && is_valid_codepoint(value as u32)
-            }
+        let value = self.get_codepoint();
+        if self.is_surrogate {
+            matches!(value, 0x010000..=0x10FFFF) && is_valid_codepoint(value)
+        } else {
+            matches!(value, 0x0000..=0xD7FF | 0xE000..=0xFFFF) && is_valid_codepoint(value)
         }
     }
 }

@@ -3,10 +3,11 @@ pub mod utf8sequence;
 
 pub trait Utf {
     type Point;
-    type Codepoint;
-    fn get_codepoint(&self) -> Self::Codepoint;
+    fn get_codepoint(&self) -> u32;
     fn add_point(&mut self, point: Self::Point) -> bool;
-    fn is_valid(&self) -> bool;
+    fn is_valid(&self) -> bool {
+        is_valid_codepoint(self.get_codepoint())
+    }
 }
 pub const fn is_valid_codepoint(codepoint: u32) -> bool {
     char::from_u32(codepoint).is_some()

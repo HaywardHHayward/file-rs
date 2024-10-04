@@ -14,10 +14,9 @@ pub struct Utf8Sequence {
 
 impl Utf for Utf8Sequence {
     type Point = u8;
-    type Codepoint = u32;
     #[inline]
-    fn get_codepoint(&self) -> Self::Codepoint {
-        let mut codepoint: u32 = match self.utf8_type {
+    fn get_codepoint(&self) -> u32 {
+        let mut codepoint = match self.utf8_type {
             Utf8Type::Ascii(value) => return value as u32,
             Utf8Type::Western(bytes) => bytes[0] ^ 0b1100_0000,
             Utf8Type::Bmp(bytes) => bytes[0] ^ 0b1110_0000,
@@ -111,31 +110,27 @@ impl Utf8Sequence {
         match self.utf8_type {
             Utf8Type::Ascii(ref mut value) => {
                 if index < 1 {
-                    Some(value)
-                } else {
-                    None
+                    return Some(value);
                 }
+                None
             }
             Utf8Type::Western(ref mut bytes) => {
                 if index < bytes.len() {
-                    Some(&mut bytes[index])
-                } else {
-                    None
+                    return Some(&mut bytes[index]);
                 }
+                None
             }
             Utf8Type::Bmp(ref mut bytes) => {
                 if index < bytes.len() {
-                    Some(&mut bytes[index])
-                } else {
-                    None
+                    return Some(&mut bytes[index]);
                 }
+                None
             }
             Utf8Type::Other(ref mut bytes) => {
                 if index < bytes.len() {
-                    Some(&mut bytes[index])
-                } else {
-                    None
+                    return Some(&mut bytes[index]);
                 }
+                None
             }
         }
     }
