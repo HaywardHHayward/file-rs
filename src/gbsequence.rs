@@ -21,7 +21,8 @@ impl GbSequence {
         self.is_complete
     }
 
-    pub const fn add_codepoint(&mut self, codepoint: u8) -> bool {
+    #[inline]
+    pub fn add_codepoint(&mut self, codepoint: u8) -> bool {
         if self.current_length == 1 {
             if self.data[0] <= 0x7F {
                 false
@@ -38,13 +39,11 @@ impl GbSequence {
                 return false;
             }
         } else if self.current_length == 2 {
-            return if 0x30 <= self.data[1] && self.data[1] <= 0x39 {
-                0x81 <= codepoint && codepoint <= 0xFE
-            } else {
-                false
-            };
+            return 0x30 <= self.data[1]
+                && self.data[1] <= 0x39
+                && (0x81..=0xFE).contains(&codepoint);
         } else if self.current_length == 3 {
-            return if 0x30 <= codepoint && codepoint <= 0x39 {
+            return if (0x30..=0x39).contains(&codepoint) {
                 self.is_complete = true;
                 true
             } else {

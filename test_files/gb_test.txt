@@ -14,7 +14,7 @@ Release Date: March 13, 2010 [EBook #31617]
 
 Language: Japanese
 
-Character set encoding: UTF-8
+Character set encoding: GB18030
 
 *** START OF THIS PROJECT GUTENBERG EBOOK SHISEI ***
 
