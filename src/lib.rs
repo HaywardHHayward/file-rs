@@ -40,20 +40,17 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
         for arg in args {
             s.spawn(|| {
                 let path = PathBuf::from(arg);
-                match std::fs::metadata(&path) {
-                    Ok(path_metadata) => {
-                        if path_metadata.len() == 0 {
-                            let mut file_states = shared_file_states.lock().unwrap();
-                            file_states.insert(path, Ok(BufferType::Empty));
-                            return;
-                        }
-                    }
-                    Err(error) => {
-                        let mut file_states = shared_file_states.lock().unwrap();
-                        file_states.insert(path, Err(error));
-                        return;
-                    }
-                };
+                let metadata = std::fs::metadata(&path);
+                if let Err(error) = metadata {
+                    let mut file_states = shared_file_states.lock().unwrap();
+                    file_states.insert(path, Err(error));
+                    return;
+                }
+                if metadata.unwrap().len() == 0 {
+                    let mut file_states = shared_file_states.lock().unwrap();
+                    file_states.insert(path, Ok(BufferType::Empty));
+                    return;
+                }
                 let file = match File::open(&path) {
                     Ok(open_file) => open_file,
                     Err(error) => {
@@ -76,9 +73,9 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
                 BufferType::Empty => "empty",
                 BufferType::Ascii => "ASCII text",
                 BufferType::Latin1 => "ISO 8859-1 text",
-                BufferType::Gb => "GB 18030 text",
                 BufferType::Utf8 => "UTF-8 text",
                 BufferType::Utf16 => "UTF-16 text",
+                BufferType::Gb => "GB 18030 text",
                 BufferType::Data => "data",
             },
             Err(error) => &error.to_string(),
@@ -105,7 +102,7 @@ fn classify_file(reader: impl BufRead) -> BufferState {
     let mut utf16_sequence = None;
     let mut gb_sequence = None;
     let mut endianness = Endianness::LittleEndian;
-    let mut utf16_buffer = [0; 2];
+    let mut byte_buffer = [0; 2];
     let mut bytes_read = 0;
     for result_byte in reader.bytes() {
         let byte = result_byte?;
@@ -114,13 +111,13 @@ fn classify_file(reader: impl BufRead) -> BufferState {
             is_ascii = false;
         }
         if is_utf16 {
-            utf16_buffer[(bytes_read - 1) % 2] = byte;
+            byte_buffer[(bytes_read - 1) % 2] = byte;
             if bytes_read % 2 == 0 {
                 validate_utf16(
                     &mut is_utf16,
                     &mut utf16_sequence,
                     &mut endianness,
-                    utf16_buffer,
+                    byte_buffer,
                     bytes_read,
                 );
             }
@@ -195,28 +192,19 @@ fn classify_file(reader: impl BufRead) -> BufferState {
             } else {
                 *is_utf16 = false;
             }
-        } else {
-            validate_utf16_sequence(is_utf16, utf16_sequence, *endianness, utf16_buffer);
+            return;
         }
-        #[inline]
-        fn validate_utf16_sequence(
-            is_utf16: &mut bool,
-            utf16_sequence: &mut Option<Utf16Sequence>,
-            endianness: Endianness,
-            utf16_buffer: [u8; 2],
-        ) {
-            if let Some(sequence) = utf16_sequence.as_mut() {
-                if !sequence.add_point(utf16_buffer) {
-                    *is_utf16 = false;
-                }
-                *utf16_sequence = None;
-            } else {
-                *utf16_sequence = Some(Utf16Sequence::new(utf16_buffer, endianness));
-                let sequence = utf16_sequence.as_ref().unwrap();
-                if !sequence.is_surrogate() {
-                    *is_utf16 = sequence.is_valid() && is_text(sequence.get_codepoint());
-                    *utf16_sequence = None;
-                }
+        if let Some(sequence) = utf16_sequence.as_mut() {
+            if !sequence.add_point(utf16_buffer) {
+                *is_utf16 = false;
+            }
+            *utf16_sequence = None;
+        } else {
+            let sequence = Utf16Sequence::new(utf16_buffer, *endianness);
+            if sequence.is_surrogate() {
+                *utf16_sequence = Some(sequence);
+            } else if !sequence.is_valid() || !is_text(sequence.get_codepoint()) {
+                *is_utf16 = false;
             }
         }
     }

@@ -23,34 +23,27 @@ impl GbSequence {
 
     #[inline]
     pub fn add_codepoint(&mut self, codepoint: u8) -> bool {
-        if self.current_length == 1 {
-            if self.data[0] <= 0x7F {
-                false
-            } else if 0x81 <= self.data[0] && self.data[0] <= 0xFE {
-                match codepoint {
-                    0x30..=0x39 => true,
-                    0x40..=0x7E | 0x80..=0xFE => {
-                        self.is_complete = true;
-                        true
-                    }
-                    _ => false,
+        self.data[self.current_length as usize] = codepoint;
+        self.current_length += 1;
+        if self.current_length == 2 {
+            if (0x81..=0xFE).contains(&self.data[0]) {
+                if (0x40..=0xFE).contains(&codepoint) && codepoint != 0x7F {
+                    self.is_complete = true;
+                    true
+                } else {
+                    ((0x81..=0x84).contains(&self.data[0]) || (0x90..=0xE3).contains(&self.data[0]))
+                        && (0x30..=0x39).contains(&codepoint)
                 }
             } else {
-                return false;
-            }
-        } else if self.current_length == 2 {
-            return 0x30 <= self.data[1]
-                && self.data[1] <= 0x39
-                && (0x81..=0xFE).contains(&codepoint);
-        } else if self.current_length == 3 {
-            return if (0x30..=0x39).contains(&codepoint) {
-                self.is_complete = true;
-                true
-            } else {
                 false
-            };
+            }
+        } else if self.current_length == 3 {
+            return (0x81..=0xFE).contains(&codepoint);
+        } else if self.current_length == 4 {
+            self.is_complete = true;
+            return (0x30..=0x39).contains(&codepoint);
         } else {
-            false
+            return false;
         }
     }
 }

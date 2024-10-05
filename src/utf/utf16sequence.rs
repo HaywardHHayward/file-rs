@@ -10,15 +10,9 @@ impl Utf for Utf16Sequence {
 
     #[inline]
     fn get_codepoint(&self) -> u32 {
-        let high = match self.endianness {
-            Endianness::BigEndian => u16::from_be_bytes([self.bytes[0], self.bytes[1]]),
-            Endianness::LittleEndian => u16::from_le_bytes([self.bytes[0], self.bytes[1]]),
-        } as u32;
+        let high = Self::bytes_to_u16([self.bytes[0], self.bytes[1]], self.endianness) as u32;
         if self.is_surrogate {
-            let low = match self.endianness {
-                Endianness::BigEndian => u16::from_be_bytes([self.bytes[2], self.bytes[3]]),
-                Endianness::LittleEndian => u16::from_le_bytes([self.bytes[2], self.bytes[3]]),
-            } as u32;
+            let low = Self::bytes_to_u16([self.bytes[2], self.bytes[3]], self.endianness) as u32;
             ((high - 0xD800) * 0x400) + (low - 0xDC00) + 0x10000
         } else {
             high
@@ -32,8 +26,7 @@ impl Utf for Utf16Sequence {
         if !(0xDC00..=0xDFFF).contains(&Self::bytes_to_u16(point, self.endianness)) {
             return false;
         }
-        self.bytes[2] = point[0];
-        self.bytes[3] = point[1];
+        [self.bytes[2], self.bytes[3]] = [point[0], point[1]];
         true
     }
     #[inline]
@@ -50,19 +43,9 @@ impl Utf for Utf16Sequence {
 impl Utf16Sequence {
     #[inline]
     pub const fn new(bytes: [u8; 2], endianness: Endianness) -> Self {
-        let is_surrogate = match endianness {
-            Endianness::BigEndian => {
-                let codepoint = u16::from_be_bytes([bytes[0], bytes[1]]);
-                matches!(codepoint, 0xD800..=0xDBFF)
-            }
-            Endianness::LittleEndian => {
-                let codepoint = u16::from_le_bytes([bytes[0], bytes[1]]);
-                matches!(codepoint, 0xD800..=0xDBFF)
-            }
-        };
         Self {
             bytes: [bytes[0], bytes[1], 0, 0],
-            is_surrogate,
+            is_surrogate: matches!(Self::bytes_to_u16(bytes, endianness), 0xD800..=0xDBFF),
             endianness,
         }
     }
