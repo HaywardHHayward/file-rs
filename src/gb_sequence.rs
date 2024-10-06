@@ -38,12 +38,12 @@ impl GbSequence {
                 false
             }
         } else if self.current_length == 3 {
-            return (0x81..=0xFE).contains(&codepoint);
+            (0x81..=0xFE).contains(&codepoint)
         } else if self.current_length == 4 {
             self.is_complete = true;
-            return (0x30..=0x39).contains(&codepoint);
+            (0x30..=0x39).contains(&codepoint)
         } else {
-            return false;
+            false
         }
     }
 }

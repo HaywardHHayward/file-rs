@@ -22,17 +22,23 @@ impl Utf for Utf8Sequence {
             Utf8Type::Bmp(bytes) => bytes[0] ^ 0b1110_0000,
             Utf8Type::Other(bytes) => bytes[0] ^ 0b1111_0000,
         } as u32;
-        for i in 1..self.full_len() {
-            codepoint = (codepoint << 6) | ((self.get(i).unwrap() ^ 0b10_000000) as u32);
+        if self.full_len() >= 2 {
+            codepoint = (codepoint << 6) | ((self.get(1).unwrap() ^ 0b10_000000) as u32);
+        }
+        if self.full_len() >= 3 {
+            codepoint = (codepoint << 6) | ((self.get(2).unwrap() ^ 0b10_000000) as u32);
+        }
+        if self.full_len() == 4 {
+            codepoint = (codepoint << 6) | ((self.get(3).unwrap() ^ 0b10_000000) as u32);
         }
         codepoint
     }
     #[inline]
     fn add_point(&mut self, point: Self::Point) -> bool {
-        if self.current_len() + 1 > self.full_len() {
+        if self.current_len() >= self.full_len() {
             return false;
         }
-        if point >= 0b1100_0000 || Self::is_invalid(point) {
+        if !(0b1000_0000..0b1100_0000).contains(&point) || Self::is_invalid(point) {
             return false;
         }
         let reference = self.get_mut(self.current_len());
@@ -61,7 +67,7 @@ impl Utf for Utf8Sequence {
 impl Utf8Sequence {
     #[inline]
     pub const fn build(byte: u8) -> Option<Self> {
-        if (byte >= 0x80 && byte <= 0xBF) || Self::is_invalid(byte) {
+        if (0x80 <= byte && byte <= 0xBF) || Self::is_invalid(byte) {
             return None;
         }
         let utf8_type = match byte.leading_ones() {
@@ -78,60 +84,26 @@ impl Utf8Sequence {
     }
     #[inline]
     const fn get(&self, index: usize) -> Option<u8> {
+        if index >= self.full_len() {
+            return None;
+        }
         match self.utf8_type {
-            Utf8Type::Ascii(value) => {
-                if index < 1 {
-                    return Some(value);
-                }
-                None
-            }
-            Utf8Type::Western(bytes) => {
-                if index < bytes.len() {
-                    return Some(bytes[index]);
-                }
-                None
-            }
-            Utf8Type::Bmp(bytes) => {
-                if index < bytes.len() {
-                    return Some(bytes[index]);
-                }
-                None
-            }
-            Utf8Type::Other(bytes) => {
-                if index < bytes.len() {
-                    return Some(bytes[index]);
-                }
-                None
-            }
+            Utf8Type::Ascii(value) => Some(value),
+            Utf8Type::Western(bytes) => Some(bytes[index]),
+            Utf8Type::Bmp(bytes) => Some(bytes[index]),
+            Utf8Type::Other(bytes) => Some(bytes[index]),
         }
     }
     #[inline]
     fn get_mut(&mut self, index: usize) -> Option<&mut u8> {
+        if index >= self.full_len() {
+            return None;
+        }
         match self.utf8_type {
-            Utf8Type::Ascii(ref mut value) => {
-                if index < 1 {
-                    return Some(value);
-                }
-                None
-            }
-            Utf8Type::Western(ref mut bytes) => {
-                if index < bytes.len() {
-                    return Some(&mut bytes[index]);
-                }
-                None
-            }
-            Utf8Type::Bmp(ref mut bytes) => {
-                if index < bytes.len() {
-                    return Some(&mut bytes[index]);
-                }
-                None
-            }
-            Utf8Type::Other(ref mut bytes) => {
-                if index < bytes.len() {
-                    return Some(&mut bytes[index]);
-                }
-                None
-            }
+            Utf8Type::Ascii(ref mut value) => Some(value),
+            Utf8Type::Western(ref mut bytes) => Some(&mut bytes[index]),
+            Utf8Type::Bmp(ref mut bytes) => Some(&mut bytes[index]),
+            Utf8Type::Other(ref mut bytes) => Some(&mut bytes[index]),
         }
     }
     pub const fn full_len(&self) -> usize {
