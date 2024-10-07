@@ -4,19 +4,21 @@ mod utf;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    fs::File,
+    fs::{canonicalize, File},
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
     path::PathBuf,
     sync::Mutex,
     thread,
 };
 
+use itertools::Itertools;
+
 use crate::{
     gb_sequence::*,
     utf::{utf16sequence::*, utf8sequence::*, *},
 };
 
-enum BufferType {
+pub enum BufferType {
     Empty,
     Ascii,
     Latin1,
@@ -26,7 +28,7 @@ enum BufferType {
     Data,
 }
 
-type BufferState = Result<BufferType, IOError>;
+pub type BufferState = Result<BufferType, IOError>;
 
 pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError> {
     if args.len() == 0 {
@@ -37,7 +39,7 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
     }
     let shared_file_states = Mutex::new(BTreeMap::new());
     thread::scope(|s| {
-        for arg in args {
+        for arg in args.unique_by(|a| canonicalize(a).unwrap_or(PathBuf::from(a))) {
             s.spawn(|| {
                 let path = PathBuf::from(arg);
                 let metadata = std::fs::metadata(&path);
@@ -93,7 +95,7 @@ const fn is_byte_latin1(byte: u8) -> bool {
     is_byte_ascii(byte) || byte >= 0xA0
 }
 
-fn classify_file(reader: impl BufRead) -> BufferState {
+pub fn classify_file(reader: impl BufRead) -> BufferState {
     let mut is_ascii = true;
     let mut is_latin1 = true;
     let [mut is_utf8, mut is_utf16] = [true; 2];

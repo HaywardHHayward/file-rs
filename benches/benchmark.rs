@@ -1,6 +1,14 @@
-use std::{ffi::OsString, ops::RangeInclusive};
+use std::{
+    cmp::max,
+    ffi::OsString,
+    fs::File,
+    io::BufReader,
+    path::{Path, PathBuf},
+};
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use file::classify_file;
+use itertools::Itertools;
 
 const FILE_LIST: [&str; 13] = [
     "./test_files/ascii.txt", // ascii 0-1
@@ -18,33 +26,55 @@ const FILE_LIST: [&str; 13] = [
     "./test_files/data.data", // data 12
 ];
 
-fn file_length(path: &OsString) -> u64 {
+const SMALL_LIST: [&str; 4] = [FILE_LIST[1], FILE_LIST[2], FILE_LIST[5], FILE_LIST[11]];
+
+fn file_length(path: &Path) -> u64 {
     std::fs::metadata(path).unwrap().len()
 }
 
-fn test_files(c: &mut Criterion, range_inclusive: RangeInclusive<usize>, group_name: String) {
-    let group_collection = FILE_LIST[range_inclusive].iter().map(OsString::from);
-    let mut group = c.benchmark_group(&group_name);
+fn classification_bench(c: &mut Criterion) {
+    let group_collection = FILE_LIST.iter().map(OsString::from).map(PathBuf::from);
+    let mut group = c.benchmark_group("Classification");
     for path in group_collection.clone() {
         group.throughput(Throughput::Bytes(file_length(&path)));
         group.bench_with_input(
-            BenchmarkId::from_parameter(path.to_string_lossy()),
+            BenchmarkId::from_parameter(path.file_name().unwrap().to_string_lossy()),
             &path,
-            |b, path| b.iter(|| file::file(vec![path.to_owned()].into_iter())),
+            |b, path| b.iter(|| classify_file(BufReader::new(File::open(path).unwrap())).unwrap()),
         );
     }
     group.finish();
 }
-fn all(c: &mut Criterion) {
-    test_files(c, 0..=12, String::from("files"));
-    let all = FILE_LIST.iter().map(OsString::from);
-    c.bench_with_input(
-        BenchmarkId::new("all files", "all files"),
-        &all,
-        |b, path| b.iter(|| file::file(path.to_owned())),
-    );
+
+fn program_bench(c: &mut Criterion) {
+    let group_collection = SMALL_LIST.iter().map(OsString::from);
+    let mut group = c.benchmark_group("Program");
+    group.sample_size(25);
+    for paths in group_collection.clone().powerset() {
+        let max_bytes = paths
+            .iter()
+            .fold(0, |acc, path| max(file_length(Path::new(path)), acc));
+        group.throughput(Throughput::Bytes(max_bytes));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(format!(
+                "{} - {}",
+                max_bytes,
+                paths
+                    .iter()
+                    .map(|a| Path::new(a)
+                        .file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string())
+                    .join("/")
+            )),
+            &paths,
+            |b, paths| b.iter(|| file::file(paths.iter().cloned())),
+        );
+    }
+    group.finish();
 }
 
-criterion_group!(benches, all);
+criterion_group!(benches, classification_bench, program_bench);
 
 criterion_main!(benches);
