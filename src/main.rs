@@ -1,4 +1,4 @@
-use file::file;
+use file::*;
 
 fn main() {
     let results = file(std::env::args_os().skip(1));
