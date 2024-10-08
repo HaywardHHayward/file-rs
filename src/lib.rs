@@ -7,7 +7,6 @@ use std::{
     fs::{canonicalize, File},
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
     path::PathBuf,
-    sync::Mutex,
     thread,
 };
 
@@ -37,39 +36,38 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
             "Invalid number of arguments",
         ));
     }
-    let shared_file_states = Mutex::new(BTreeMap::new());
+    let shared_file_states = parking_lot::const_mutex(BTreeMap::new());
     thread::scope(|s| {
         for arg in args.unique_by(|a| canonicalize(a).unwrap_or(PathBuf::from(a))) {
             s.spawn(|| {
                 let path = PathBuf::from(arg);
                 let metadata = std::fs::metadata(&path);
                 if let Err(error) = metadata {
-                    let mut file_states = shared_file_states.lock().unwrap();
+                    let mut file_states = shared_file_states.lock();
                     file_states.insert(path, Err(error));
                     return;
                 }
                 if metadata.unwrap().len() == 0 {
-                    let mut file_states = shared_file_states.lock().unwrap();
+                    let mut file_states = shared_file_states.lock();
                     file_states.insert(path, Ok(BufferType::Empty));
                     return;
                 }
                 let file = match File::open(&path) {
                     Ok(open_file) => open_file,
                     Err(error) => {
-                        let mut file_states = shared_file_states.lock().unwrap();
+                        let mut file_states = shared_file_states.lock();
                         file_states.insert(path, Err(error));
                         return;
                     }
                 };
                 let data = classify_file(BufReader::new(file));
-                let mut file_states = shared_file_states.lock().unwrap();
+                let mut file_states = shared_file_states.lock();
                 file_states.insert(path, data);
             });
         }
     });
-    let file_states = shared_file_states.into_inner().unwrap();
+    let file_states = shared_file_states.into_inner();
     for (path, file_result) in file_states {
-        print!("{}: ", path.display());
         let message = match file_result {
             Ok(file_type) => match file_type {
                 BufferType::Empty => "empty",
@@ -82,7 +80,7 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
             },
             Err(error) => &error.to_string(),
         };
-        println!("{message}");
+        println!("{}: {message}", path.display());
     }
     Ok(())
 }

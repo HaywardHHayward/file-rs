@@ -40,13 +40,13 @@ fn classification_bench(c: &mut Criterion) {
         group.bench_with_input(
             BenchmarkId::from_parameter(path.file_name().unwrap().to_string_lossy()),
             &path,
-            |b, path| b.iter(|| classify_file(BufReader::new(File::open(path).unwrap())).unwrap()),
+            |b, path| b.iter(|| classify_file(BufReader::new(File::open(path).unwrap()))),
         );
     }
     group.finish();
 }
 
-fn program_bench(c: &mut Criterion) {
+fn program_working_bench(c: &mut Criterion) {
     let group_collection = SMALL_LIST.iter().map(OsString::from);
     let mut group = c.benchmark_group("Program");
     group.sample_size(25);
@@ -65,7 +65,7 @@ fn program_bench(c: &mut Criterion) {
                         .file_name()
                         .unwrap()
                         .to_string_lossy()
-                        .to_string())
+                        .into_owned())
                     .join("/")
             )),
             &paths,
@@ -75,6 +75,6 @@ fn program_bench(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, classification_bench, program_bench);
+criterion_group!(benches, classification_bench, program_working_bench);
 
 criterion_main!(benches);
