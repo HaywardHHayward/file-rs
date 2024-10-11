@@ -1,7 +1,7 @@
-pub mod utf16sequence;
-pub mod utf8sequence;
+pub(crate) mod utf16sequence;
+pub(crate) mod utf8sequence;
 
-pub trait Utf {
+pub(crate) trait Utf {
     type Point;
     fn get_codepoint(&self) -> u32;
     fn add_point(&mut self, point: Self::Point) -> bool;
@@ -9,26 +9,22 @@ pub trait Utf {
         is_valid_codepoint(self.get_codepoint())
     }
 }
-pub const fn is_valid_codepoint(codepoint: u32) -> bool {
+pub(crate) const fn is_valid_codepoint(codepoint: u32) -> bool {
     char::from_u32(codepoint).is_some()
 }
-pub const fn is_text(codepoint: u32) -> bool {
+pub(crate) const fn is_text(codepoint: u32) -> bool {
     if char::from_u32(codepoint).is_none() {
         return false;
     }
-    if (codepoint < 0xFF)
+    !((codepoint < 0xFF)
         && !(0x08 <= codepoint && 0x0D >= codepoint)
         && codepoint != 0x1B
         && !(0x20 <= codepoint && 0x7E >= codepoint)
-        && 0xA0 > codepoint
-    {
-        return false;
-    }
-    true
+        && 0xA0 > codepoint)
 }
 
 #[derive(Copy, Clone)]
-pub enum Endianness {
+pub(crate) enum Endianness {
     BigEndian,
     LittleEndian,
 }

@@ -6,7 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{
+    criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode, Throughput,
+};
 use file::classify_file;
 use itertools::Itertools;
 
@@ -36,7 +38,21 @@ fn classification_bench(c: &mut Criterion) {
     let group_collection = FILE_LIST.iter().map(OsString::from).map(PathBuf::from);
     let mut group = c.benchmark_group("Classification");
     for path in group_collection.clone() {
-        group.throughput(Throughput::Bytes(file_length(&path)));
+        let bytes = file_length(&path);
+        if bytes > 1024 * 500 {
+            group.sample_size(25);
+        } else if bytes > 1024 * 250 {
+            group.sample_size(50);
+        } else if bytes > 1024 * 100 {
+            group.sample_size(75);
+        } else if bytes > 1024 * 50 {
+            group.sample_size(125);
+        } else if bytes > 1024 * 10 {
+            group.sample_size(250);
+        } else {
+            group.sample_size(500);
+        }
+        group.throughput(Throughput::Bytes(bytes));
         group.bench_with_input(
             BenchmarkId::from_parameter(path.file_name().unwrap().to_string_lossy()),
             &path,
@@ -49,7 +65,7 @@ fn classification_bench(c: &mut Criterion) {
 fn program_working_bench(c: &mut Criterion) {
     let group_collection = SMALL_LIST.iter().map(OsString::from);
     let mut group = c.benchmark_group("Program");
-    group.sample_size(25);
+    group.sampling_mode(SamplingMode::Flat);
     for paths in group_collection.clone().powerset() {
         let max_bytes = paths
             .iter()

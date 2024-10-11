@@ -7,7 +7,7 @@ enum Utf8Type {
     Other([u8; 4]),
 }
 
-pub struct Utf8Sequence {
+pub(crate) struct Utf8Sequence {
     utf8_type: Utf8Type,
     current_length: u8,
 }
@@ -66,7 +66,7 @@ impl Utf for Utf8Sequence {
 
 impl Utf8Sequence {
     #[inline]
-    pub const fn build(byte: u8) -> Option<Self> {
+    pub(crate) const fn build(byte: u8) -> Option<Self> {
         if (0x80 <= byte && byte <= 0xBF) || Self::is_invalid(byte) {
             return None;
         }
@@ -106,7 +106,7 @@ impl Utf8Sequence {
             Utf8Type::Other(ref mut bytes) => Some(&mut bytes[index]),
         }
     }
-    pub const fn full_len(&self) -> usize {
+    pub(crate) const fn full_len(&self) -> usize {
         match self.utf8_type {
             Utf8Type::Ascii(_) => 1,
             Utf8Type::Western(v) => v.len(),
@@ -117,7 +117,7 @@ impl Utf8Sequence {
     const fn is_invalid(byte: u8) -> bool {
         matches!(byte, 0xC0 | 0xC1 | 0xF5..)
     }
-    pub const fn current_len(&self) -> usize {
+    pub(crate) const fn current_len(&self) -> usize {
         self.current_length as usize
     }
 }
