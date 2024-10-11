@@ -2,9 +2,10 @@ mod gb_sequence;
 mod utf;
 
 use std::{
+    cmp::min,
     collections::BTreeMap,
     ffi::OsString,
-    fs::{canonicalize, File},
+    fs::File,
     io::{prelude::*, BufReader, Error as IOError, ErrorKind},
     path::PathBuf,
     thread,
@@ -38,7 +39,8 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
     }
     let shared_file_states = parking_lot::const_mutex(BTreeMap::new());
     thread::scope(|s| {
-        for arg in args.unique_by(|a| canonicalize(a).unwrap_or(PathBuf::from(a))) {
+        for arg in args.unique_by(|a| std::fs::canonicalize(a).unwrap_or(PathBuf::from(a))) {
+            // gets rid of duplicate file paths so we don't do work twice
             s.spawn(|| {
                 let path = PathBuf::from(arg);
                 let metadata = std::fs::metadata(&path);
@@ -47,7 +49,8 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
                     file_states.insert(path, Err(error));
                     return;
                 }
-                if metadata.unwrap().len() == 0 {
+                let bytes = metadata.unwrap().len();
+                if bytes == 0 {
                     let mut file_states = shared_file_states.lock();
                     file_states.insert(path, Ok(BufferType::Empty));
                     return;
@@ -60,7 +63,8 @@ pub fn file(args: impl ExactSizeIterator<Item = OsString>) -> Result<(), IOError
                         return;
                     }
                 };
-                let data = classify_file(BufReader::new(file));
+                let reader = BufReader::with_capacity(min(8 * 1024, bytes as usize), file);
+                let data = classify_file(reader);
                 let mut file_states = shared_file_states.lock();
                 file_states.insert(path, data);
             });
@@ -93,15 +97,15 @@ const fn is_byte_latin1(byte: u8) -> bool {
     is_byte_ascii(byte) || byte >= 0xA0
 }
 
-pub fn classify_file(reader: impl BufRead) -> BufferState {
+pub fn classify_file(reader: impl Read) -> BufferState {
     let mut is_ascii = true;
     let mut is_latin1 = true;
     let [mut is_utf8, mut is_utf16] = [true; 2];
     let mut is_gb = true;
-    let mut utf8_sequence = None;
-    let mut utf16_sequence = None;
-    let mut gb_sequence = None;
-    let mut endianness = Endianness::LittleEndian;
+    let mut utf8_sequence: Option<Utf8Sequence> = None;
+    let mut utf16_sequence: Option<Utf16Sequence> = None;
+    let mut gb_sequence: Option<GbSequence> = None;
+    let mut endianness: Option<Endianness> = None;
     let mut byte_buffer = [0; 2];
     let mut bytes_read = 0;
     for result_byte in reader.bytes() {
@@ -110,7 +114,7 @@ pub fn classify_file(reader: impl BufRead) -> BufferState {
         if is_ascii && !is_byte_ascii(byte) {
             is_ascii = false;
         }
-        if is_utf16 {
+        if !is_ascii && is_utf16 {
             byte_buffer[(bytes_read - 1) % 2] = byte;
             if bytes_read % 2 == 0 {
                 validate_utf16(
@@ -118,7 +122,6 @@ pub fn classify_file(reader: impl BufRead) -> BufferState {
                     &mut utf16_sequence,
                     &mut endianness,
                     byte_buffer,
-                    bytes_read,
                 );
             }
         }
@@ -178,17 +181,16 @@ pub fn classify_file(reader: impl BufRead) -> BufferState {
     fn validate_utf16(
         is_utf16: &mut bool,
         utf16_sequence: &mut Option<Utf16Sequence>,
-        endianness: &mut Endianness,
+        endianness: &mut Option<Endianness>,
         utf16_buffer: [u8; 2],
-        bytes_read: usize,
     ) {
-        if bytes_read == 2 {
+        if endianness.is_none() {
             let be = u16::from_be_bytes(utf16_buffer);
             let le = u16::from_le_bytes(utf16_buffer);
             if be == 0xFEFF {
-                *endianness = Endianness::BigEndian;
+                *endianness = Some(Endianness::BigEndian);
             } else if le == 0xFEFF {
-                *endianness = Endianness::LittleEndian;
+                *endianness = Some(Endianness::LittleEndian);
             } else {
                 *is_utf16 = false;
             }
@@ -200,7 +202,7 @@ pub fn classify_file(reader: impl BufRead) -> BufferState {
             }
             *utf16_sequence = None;
         } else {
-            let sequence = Utf16Sequence::new(utf16_buffer, *endianness);
+            let sequence = Utf16Sequence::new(utf16_buffer, endianness.unwrap());
             if sequence.is_surrogate() {
                 *utf16_sequence = Some(sequence);
             } else if !sequence.is_valid() || !is_text(sequence.get_codepoint()) {

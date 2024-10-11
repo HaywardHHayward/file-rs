@@ -1,11 +1,11 @@
-pub struct GbSequence {
+pub(crate) struct GbSequence {
     data: [u8; 4],
     current_length: u8,
     is_complete: bool,
 }
 
 impl GbSequence {
-    pub const fn build(byte: u8) -> Option<Self> {
+    pub(crate) const fn build(byte: u8) -> Option<Self> {
         if byte == 0x80 || byte == 0xFF {
             return None;
         }
@@ -17,12 +17,12 @@ impl GbSequence {
         })
     }
 
-    pub const fn is_complete(&self) -> bool {
+    pub(crate) const fn is_complete(&self) -> bool {
         self.is_complete
     }
 
     #[inline]
-    pub fn add_codepoint(&mut self, codepoint: u8) -> bool {
+    pub(crate) fn add_codepoint(&mut self, codepoint: u8) -> bool {
         self.data[self.current_length as usize] = codepoint;
         self.current_length += 1;
         if self.current_length == 2 {
