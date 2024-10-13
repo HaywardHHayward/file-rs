@@ -1,5 +1,4 @@
-mod gb_sequence;
-mod utf;
+mod vle;
 
 use std::{
     cmp::min,
@@ -13,9 +12,10 @@ use std::{
 
 use itertools::Itertools;
 
-use crate::{
+use crate::vle::{
     gb_sequence::*,
-    utf::{utf16sequence::*, utf8sequence::*, *},
+    unicode::{utf16sequence::*, utf8sequence::*, *},
+    VariableLengthEncoding,
 };
 
 pub enum BufferType {
@@ -117,19 +117,34 @@ pub fn classify_file(reader: impl Read) -> BufferState {
         if !is_ascii && is_utf16 {
             byte_buffer[(bytes_read - 1) % 2] = byte;
             if bytes_read % 2 == 0 {
-                validate_utf16(
-                    &mut is_utf16,
-                    &mut utf16_sequence,
-                    &mut endianness,
-                    byte_buffer,
-                );
+                if let Some(endian_value) = endianness {
+                    let point = match endian_value {
+                        Endianness::BigEndian => {
+                            u16::from_be_bytes([byte_buffer[0], byte_buffer[1]])
+                        }
+                        Endianness::LittleEndian => {
+                            u16::from_le_bytes([byte_buffer[0], byte_buffer[1]])
+                        }
+                    };
+                    validate_vle(&mut is_utf16, &mut utf16_sequence, point);
+                } else {
+                    let be = u16::from_be_bytes(byte_buffer);
+                    let le = u16::from_le_bytes(byte_buffer);
+                    if be == 0xFEFF {
+                        endianness = Some(Endianness::BigEndian);
+                    } else if le == 0xFEFF {
+                        endianness = Some(Endianness::LittleEndian);
+                    } else {
+                        is_utf16 = false;
+                    }
+                }
             }
         }
         if !is_ascii && is_utf8 {
-            validate_utf8(&mut is_utf8, &mut utf8_sequence, byte);
+            validate_vle(&mut is_utf8, &mut utf8_sequence, byte);
         }
         if !is_ascii && is_gb {
-            validate_gb(&mut is_gb, &mut gb_sequence, byte);
+            validate_vle(&mut is_gb, &mut gb_sequence, byte);
         }
         if !is_ascii && is_latin1 && !is_byte_latin1(byte) {
             is_latin1 = false;
@@ -157,75 +172,30 @@ pub fn classify_file(reader: impl Read) -> BufferState {
     };
 
     #[inline]
-    fn validate_utf8(is_utf8: &mut bool, utf8_sequence: &mut Option<Utf8Sequence>, byte: u8) {
-        if let Some(sequence) = utf8_sequence.as_mut() {
-            if sequence.current_len() < sequence.full_len() && !sequence.add_point(byte) {
-                *is_utf8 = false;
+    fn validate_vle<T: VariableLengthEncoding>(
+        is_valid: &mut bool,
+        vle_sequence: &mut Option<T>,
+        point: T::Point,
+    ) {
+        if let Some(sequence) = vle_sequence.as_mut() {
+            if !sequence.is_complete() && !sequence.add_point(point) {
+                *is_valid = false;
                 return;
             }
-        } else if let Some(sequence) = Utf8Sequence::build(byte) {
-            *utf8_sequence = Some(sequence);
-        } else {
-            *is_utf8 = false;
-            return;
-        }
-        let sequence = utf8_sequence.as_ref().unwrap();
-        if sequence.full_len() == sequence.current_len() {
-            if !sequence.is_valid() || !is_text(sequence.get_codepoint()) {
-                *is_utf8 = false;
-            }
-            *utf8_sequence = None;
-        }
-    }
-    #[inline]
-    fn validate_utf16(
-        is_utf16: &mut bool,
-        utf16_sequence: &mut Option<Utf16Sequence>,
-        endianness: &mut Option<Endianness>,
-        utf16_buffer: [u8; 2],
-    ) {
-        if endianness.is_none() {
-            let be = u16::from_be_bytes(utf16_buffer);
-            let le = u16::from_le_bytes(utf16_buffer);
-            if be == 0xFEFF {
-                *endianness = Some(Endianness::BigEndian);
-            } else if le == 0xFEFF {
-                *endianness = Some(Endianness::LittleEndian);
-            } else {
-                *is_utf16 = false;
-            }
-            return;
-        }
-        if let Some(sequence) = utf16_sequence.as_mut() {
-            if !sequence.add_point(utf16_buffer) {
-                *is_utf16 = false;
-            }
-            *utf16_sequence = None;
-        } else {
-            let sequence = Utf16Sequence::new(utf16_buffer, endianness.unwrap());
-            if sequence.is_surrogate() {
-                *utf16_sequence = Some(sequence);
-            } else if !sequence.is_valid() || !is_text(sequence.get_codepoint()) {
-                *is_utf16 = false;
-            }
-        }
-    }
-    #[inline]
-    fn validate_gb(is_gb: &mut bool, gb_sequence: &mut Option<GbSequence>, byte: u8) {
-        if let Some(sequence) = gb_sequence.as_mut() {
-            if !sequence.add_codepoint(byte) {
-                *is_gb = false;
-            } else if sequence.is_complete() {
-                *gb_sequence = None;
-            }
-        } else if let Some(sequence) = GbSequence::build(byte) {
             if sequence.is_complete() {
-                *is_gb = is_byte_ascii(byte);
-            } else {
-                *gb_sequence = Some(sequence);
+                if !sequence.is_valid() {
+                    *is_valid = false;
+                }
+                *vle_sequence = None;
+            }
+        } else if let Some(sequence) = T::build(point) {
+            if !sequence.is_complete() {
+                *vle_sequence = Some(sequence);
+            } else if !sequence.is_valid() {
+                *is_valid = false;
             }
         } else {
-            *is_gb = false;
+            *is_valid = false;
         }
     }
 }
@@ -270,9 +240,11 @@ mod tests {
     }
     #[test]
     fn test_utf16() {
-        let utf16: [&[u8]; 2] = [
+        let utf16: [&[u8]; 4] = [
             include_bytes!("../test_files/le_utf16.txt"),
             include_bytes!("../test_files/be_utf16.txt"),
+            include_bytes!("../test_files/shisei_UTF-16LE.txt"),
+            include_bytes!("../test_files/shisei_UTF-16BE.txt"),
         ];
         let result = utf16.map(|bytes| classify_file(BufReader::new(bytes)));
         assert!(result

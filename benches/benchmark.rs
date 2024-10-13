@@ -12,7 +12,7 @@ use criterion::{
 use file::classify_file;
 use itertools::Itertools;
 
-const FILE_LIST: [&str; 13] = [
+const FILE_LIST: [&str; 15] = [
     "./test_files/ascii.txt", // ascii 0-1
     "./test_files/harpers_ASCII.txt",
     "./test_files/die_ISO-8859-1.txt", // latin1 2-4
@@ -21,14 +21,22 @@ const FILE_LIST: [&str; 13] = [
     "./test_files/shisei_UTF-8.txt", // utf8 5-7
     "./test_files/utf8.txt",
     "./test_files/utf8_test.txt",
-    "./test_files/be_utf16.txt", // utf16 8-9
+    "./test_files/be_utf16.txt", // utf16 8-11
     "./test_files/le_utf16.txt",
-    "./test_files/gb.txt", // gb 10-11
+    "./test_files/shisei_UTF-16BE.txt",
+    "./test_files/shisei_UTF-16LE.txt",
+    "./test_files/gb.txt", // gb 12-13
     "./test_files/gb_test.txt",
-    "./test_files/data.data", // data 12
+    "./test_files/data.data", // data 14
 ];
 
-const SMALL_LIST: [&str; 4] = [FILE_LIST[1], FILE_LIST[2], FILE_LIST[5], FILE_LIST[11]];
+const SMALL_LIST: [&str; 5] = [
+    FILE_LIST[1],
+    FILE_LIST[2],
+    FILE_LIST[5],
+    FILE_LIST[10],
+    FILE_LIST[13],
+];
 
 fn file_length(path: &Path) -> u64 {
     std::fs::metadata(path).unwrap().len()
