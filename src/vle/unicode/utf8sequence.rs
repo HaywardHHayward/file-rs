@@ -40,7 +40,7 @@ impl VariableLengthEncoding for Utf8Sequence {
 
     #[inline]
     fn add_point(&mut self, point: Self::Point) -> bool {
-        if self.current_len() >= self.full_len() {
+        if self.is_complete() {
             return false;
         }
         if !(0b1000_0000..0b1100_0000).contains(&point) || Self::is_invalid(point) {
@@ -84,7 +84,7 @@ impl Utf8Sequence {
         }
     }
     #[inline]
-    fn get_mut(&mut self, index: usize) -> Option<&mut u8> {
+    const fn get_mut(&mut self, index: usize) -> Option<&mut u8> {
         if index >= self.full_len() {
             return None;
         }
@@ -104,7 +104,7 @@ impl Utf8Sequence {
         }
     }
     #[inline]
-    fn get_codepoint(&self) -> u32 {
+    const fn get_codepoint(&self) -> u32 {
         let mut codepoint = match self.utf8_type {
             Utf8Type::Ascii(value) => return value as u32,
             Utf8Type::Western(bytes) => bytes[0] ^ 0b1100_0000,

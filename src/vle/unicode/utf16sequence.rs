@@ -71,7 +71,7 @@ impl VariableLengthEncoding for Utf16Sequence {
 
 impl Utf16Sequence {
     #[inline]
-    fn get_codepoint(&self) -> u32 {
+    const fn get_codepoint(&self) -> u32 {
         match self.0 {
             Utf16Type::Bmp(bytes) => bytes as u32,
             Utf16Type::Surrogate {

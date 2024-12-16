@@ -98,10 +98,7 @@ const fn is_byte_latin1(byte: u8) -> bool {
 }
 
 pub fn classify_file(reader: impl Read) -> BufferState {
-    let mut is_ascii = true;
-    let mut is_latin1 = true;
-    let [mut is_utf8, mut is_utf16] = [true; 2];
-    let mut is_gb = true;
+    let [mut is_ascii, mut is_utf8, mut is_utf16, mut is_latin1, mut is_gb] = [true; 5];
     let mut utf8_sequence: Option<Utf8Sequence> = None;
     let mut utf16_sequence: Option<Utf16Sequence> = None;
     let mut gb_sequence: Option<GbSequence> = None;
